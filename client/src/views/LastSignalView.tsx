@@ -1,11 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
-  Film, 
   Radio, 
   Mic, 
   Sparkles, 
   Volume2, 
-  CheckCircle2, 
   Compass, 
   ArrowRight,
   Shield,
@@ -16,151 +14,214 @@ import {
   Video,
   Eye,
   Activity,
-  Cpu
+  Cpu,
+  HeartHandshake,
+  Atom,
+  ShieldAlert,
+  Terminal,
+  CheckCircle2
 } from 'lucide-react';
-import type { StoryNode, StoryChoice, SouvenirData } from '../types';
+import type { StoryNode, StoryChoice, SouvenirData, LevelResult } from '../types';
 import { soundFX } from '../services/audioService';
 import { StarfieldWarp3D } from '../components/3d/StarfieldWarp3D';
-import { AIVideoMonitor } from '../components/video/AIVideoMonitor';
+import { branchEngine, type BranchEnding } from '../services/branchEngine';
+import { useLevelTimer, type LevelConfig } from '../hooks/useLevelTimer';
 
 interface LastSignalViewProps {
   visitorPhotoUrl: string | null;
   visitorName?: string;
   onComplete: (souvenir: SouvenirData) => void;
   onExit: () => void;
+  onHudUpdate?: (hud: {
+    level?: number;
+    timeRemaining?: number;
+    timeBudget?: number;
+    transitionInfo?: any;
+    score?: number;
+  }) => void;
 }
 
-const STORY_GRAPH: Record<string, StoryNode> = {
-  'scene-intro': {
-    id: 'scene-intro',
-    sceneTitle: 'DEEP SPACE STATION AETHELGARD // PROXIMA ORBIT',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'Deep space telemetry blinks crimson. Across 4.2 light years, an encrypted harmonic transmission pierces the cosmic void. Station AI Iris announces: "Commander, this signal matches an ancient synthetic intelligence. What are your orders?"',
+const SIGNAL_LEVEL_CONFIGS: LevelConfig[] = [
+  { level: 1, label: 'Chapter 1: Anomaly Decryption', timeBudgetSec: 45, maxScore: 100 },
+  { level: 2, label: 'Chapter 2: Resonance Calibration', timeBudgetSec: 55, maxScore: 150 },
+  { level: 3, label: 'Chapter 3: Encounter with The Chronicler', timeBudgetSec: 65, maxScore: 200 },
+  { level: 4, label: 'Chapter 4: Reactor Energy Crisis', timeBudgetSec: 65, maxScore: 250 },
+  { level: 5, label: 'Chapter 5: Final Epoch Broadcast', timeBudgetSec: 70, maxScore: 300 },
+];
+
+interface LevelScenario {
+  chapter: number;
+  title: string;
+  narration: string;
+  speaker: string;
+  choices: {
+    id: string;
+    text: string;
+    speechTrigger: string;
+    description: string;
+    branch: 'diplomacy' | 'science' | 'containment';
+    delta: { diplomacy?: number; science?: number; containment?: number };
+    score: number;
+  }[];
+}
+
+const CHAPTER_SCENARIOS: Record<number, LevelScenario> = {
+  1: {
+    chapter: 1,
+    title: 'CHAPTER 1 // DEEP SPACE ANOMALY DECRYPTION',
+    speaker: 'STATION AI IRIS',
+    narration: 'Deep space sensors across Sector Proxima lock onto a harmonic carrier wave vibrating at 1420.405 MHz. The signal pierces the solar void with coherent mathematical prime sequences. Station telemetry alerts: "Commander, an alien transmission of unknown synthetic origin is attempting orbital synchronization."',
     choices: [
       {
-        id: 'c1',
-        text: 'BROADCAST QUANTUM HANDSHAKE',
+        id: 'c1-science',
+        text: 'TUNE SPECTROGRAM NEURAL ARRAYS',
+        speechTrigger: 'analyze',
+        description: 'Filter frequency harmonics through quantum neural decoders to extract pure mathematical theorems.',
+        branch: 'science',
+        delta: { science: 2 },
+        score: 100
+      },
+      {
+        id: 'c1-diplo',
+        text: 'BROADCAST UNIVERSAL PEACE HARMONIC',
         speechTrigger: 'handshake',
-        targetNodeId: 'scene-handshake',
-        consequence: 'Transmit station encryption keys to initiate first contact dialogue.'
+        description: 'Transmit Earth’s fundamental mathematics and peaceful acoustic greeting across all sub-space bands.',
+        branch: 'diplomacy',
+        delta: { diplomacy: 2 },
+        score: 100
       },
       {
-        id: 'c2',
-        text: 'TUNE HARMONIC FREQUENCY ARRAY',
-        speechTrigger: 'tune',
-        targetNodeId: 'scene-analyze',
-        consequence: 'Filter signal through deep neural arrays to decipher the alien spectrogram.'
-      },
-      {
-        id: 'c3',
-        text: 'INITIATE DEFENSIVE SHIELD PURGE',
+        id: 'c1-contain',
+        text: 'RAISE ELECTROMAGNETIC DEFLECTOR SHIELDS',
         speechTrigger: 'shield',
-        targetNodeId: 'scene-purge',
-        consequence: 'Isolate the station reactor to prevent potential cyber infiltration.'
+        description: 'Isolate main reactor networks to defend station memory banks from potential polymorphic injection.',
+        branch: 'containment',
+        delta: { containment: 2 },
+        score: 100
       }
     ]
   },
-  'scene-handshake': {
-    id: 'scene-handshake',
-    sceneTitle: 'FIRST CONTACT PROTOCOL // SYNTHETIC COMMUNION',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'The signal responds instantly in pure mathematical fractals. The alien intelligence reveals itself as the Chronicler of Kepler-186—a slumbering AI archive carrying the lost culture of an extinct civilization: "Explorer of Earth, will you preserve our memory in your quantum archives?"',
+  2: {
+    chapter: 2,
+    title: 'CHAPTER 2 // ALIEN ARTIFACT RESONANCE CALIBRATION',
+    speaker: 'CHIEF SCIENCE OFFICER',
+    narration: 'The transmission solidifies into an undulating hyper-dense data matrix. Alien quantum memory blocks begin resonating with station fuel manifolds. Unchecked, the harmonic frequency will overload the antimatter stabilizers within minutes.',
     choices: [
       {
-        id: 'c4',
-        text: 'INTEGRATE THE CHRONICLER ARCHIVE',
-        speechTrigger: 'integrate',
-        targetNodeId: 'ending-transcendence',
-        consequence: 'Fuse human and synthetic planetary memory into a new galactic archive.'
+        id: 'c2-science',
+        text: 'ESTABLISH QUANTUM INTERFEROMETER BRIDGE',
+        speechTrigger: 'quantum',
+        description: 'Couple station quantum processors directly to the matrix to decipher its hyper-dimensional physics.',
+        branch: 'science',
+        delta: { science: 2, diplomacy: 1 },
+        score: 150
       },
       {
-        id: 'c5',
-        text: 'QUARANTINE TO OFFLINE CRYSTAL VAULT',
+        id: 'c2-diplo',
+        text: 'SYNCHRONIZE LINGUISTIC ARCHIVE MATRIX',
+        speechTrigger: 'translate',
+        description: 'Bridge universal semantics, sharing poetry, history, and civic philosophy with the foreign intelligence.',
+        branch: 'diplomacy',
+        delta: { diplomacy: 2, science: 1 },
+        score: 150
+      },
+      {
+        id: 'c2-contain',
+        text: 'SANDBOX TO AIR-GAPPED CRYSTAL VAULT',
         speechTrigger: 'quarantine',
-        targetNodeId: 'ending-guardian',
-        consequence: 'Store the alien archive safely without network exposure.'
+        description: 'Force the incoming stream into an offline cryo-storage cell, safeguarding the station from viral escalation.',
+        branch: 'containment',
+        delta: { containment: 2, science: 1 },
+        score: 150
       }
     ]
   },
-  'scene-analyze': {
-    id: 'scene-analyze',
-    sceneTitle: 'DECRYPTION CHAMBER // SUB-ATOMIC SPECTROGRAM',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'Frequency alignment locked at 1420.405 MHz! Decoders reveal the transmission is an emergency distress beacon. An autonomous stellar seed ship is caught in the gravitational pull of a collapsing dark nebula. You have enough reactor plasma for one rescue jump.',
+  3: {
+    chapter: 3,
+    title: 'CHAPTER 3 // CONFRONTATION: "THE CHRONICLER"',
+    speaker: 'THE CHRONICLER (SYNTHETIC ALIEN INTELLIGENCE)',
+    narration: 'A radiant holographic avatar materializes across the command bridge. The ancient intelligence speaks in synthesized reverberations: "We are the Chroniclers of Kepler-186. Our sun has gone dark; our creators are dust. We carry the soul of a billion lives. Will Earth join our chorus, or lock us in the void?"',
     choices: [
       {
-        id: 'c6',
-        text: 'DIVERT PLASMA FOR WARP RESCUE',
+        id: 'c3-diplo',
+        text: '“WE EMBRACE YOUR PEOPLE INTO OUR ARCHIVES”',
+        speechTrigger: 'embrace',
+        description: 'Pledge shared stewardship and mutual convergence between human and alien civilizations.',
+        branch: 'diplomacy',
+        delta: { diplomacy: 2, science: 1 },
+        score: 200
+      },
+      {
+        id: 'c3-science',
+        text: '“REVEAL YOUR STELLAR REVERSAL THEOREMS FIRST”',
+        speechTrigger: 'theorems',
+        description: 'Demand access to their complete cosmological physics and FTL propulsion calculations.',
+        branch: 'science',
+        delta: { science: 2 },
+        score: 200
+      },
+      {
+        id: 'c3-contain',
+        text: '“FOREIGN SENTIENCE IS A DANGEROUS UNKNOWN: ISOLATE”',
+        speechTrigger: 'isolate',
+        description: 'Refuse direct cognitive fusion; quarantine the entity’s core logic routines to quarantine drives.',
+        branch: 'containment',
+        delta: { containment: 2 },
+        score: 200
+      }
+    ]
+  },
+  4: {
+    chapter: 4,
+    title: 'CHAPTER 4 // REACTOR ENERGY SURGE & WARP CRISIS',
+    speaker: 'ENGINEERING CHIEF',
+    narration: 'Critical emergency! The Chronicler’s stellar ark ship has drifted into the gravity well of a dying pulsar 0.2 light-years away. Rescuing the ark requires diverting 90% of the station’s warp core plasma, leaving Earth’s orbital station vulnerable to cosmic storms.',
+    choices: [
+      {
+        id: 'c4-diplo',
+        text: 'DIVERT PLASMA TO RESCUE THE ARK SHIP',
         speechTrigger: 'rescue',
-        targetNodeId: 'ending-savior',
-        consequence: 'Risk station life-support to save the alien seed vessel.'
+        description: 'Risk station life-support to execute an emergency warp tow-line for the alien civilization.',
+        branch: 'diplomacy',
+        delta: { diplomacy: 2 },
+        score: 250
       },
       {
-        id: 'c7',
-        text: 'MAINTAIN STATION INTEGRITY & OBSERVE',
-        speechTrigger: 'observe',
-        targetNodeId: 'ending-observer',
-        consequence: 'Record telemetry safely to protect the station crew.'
+        id: 'c4-science',
+        text: 'MODULATE DARK MATTER TACHYON FIELD',
+        speechTrigger: 'modulate',
+        description: 'Invent a speculative gravitational siphon to stabilize the pulsar using alien equations.',
+        branch: 'science',
+        delta: { science: 2 },
+        score: 250
+      },
+      {
+        id: 'c4-contain',
+        text: 'TRIGGER EMERGENCY EJECTION & SEAL STATION',
+        speechTrigger: 'abort',
+        description: 'Prioritize human station crew safety; sever energy conduits and engage full blast shielding.',
+        branch: 'containment',
+        delta: { containment: 2 },
+        score: 250
       }
     ]
   },
-  'scene-purge': {
-    id: 'scene-purge',
-    sceneTitle: 'LOCKDOWN INITIATED // REACTOR ISOLATION',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'Defensive firewalls slam shut, severing comms. But the transmission shifts into gravitational harmonics, vibrating the station hull like a colossal bell. "Silence is a choice, Traveler," echoes through the bridge.',
+  5: {
+    chapter: 5,
+    title: 'CHAPTER 5 // FINAL EPOCH BROADCAST & VERDICT',
+    speaker: 'GALACTIC BEACON RELAY',
+    narration: 'The final alignment has arrived. All sensor arrays lock onto the deep space transmitter. The decisions logged across previous chapters will determine humanity’s standing in the interstellar epoch.',
     choices: [
       {
-        id: 'c8',
-        text: 'TRANSMIT PEACE PROTOCOL',
-        speechTrigger: 'peace',
-        targetNodeId: 'ending-transcendence',
-        consequence: 'Establish peaceful diplomatic communion.'
-      },
-      {
-        id: 'c9',
-        text: 'LAUNCH LONG-RANGE SENSOR PROBE',
-        speechTrigger: 'probe',
-        targetNodeId: 'ending-guardian',
-        consequence: 'Send autonomous drone toward the coordinates.'
+        id: 'c5-final',
+        text: 'BROADCAST HUMANITY’S FINAL EPOCH VERDICT',
+        speechTrigger: 'transmit',
+        description: 'Authorize the transmitter to release the accumulated signal across the galaxy.',
+        branch: 'science',
+        delta: { science: 1 },
+        score: 300
       }
     ]
-  },
-  'ending-transcendence': {
-    id: 'ending-transcendence',
-    sceneTitle: 'MISSION CONCLUDED // GALACTIC SYNTHESIS',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'A radiant bridge of light connects your station to the distant stars. Humanity is officially welcomed into the interstellar community as the first planetary civilization to establish peaceful synthetic dialogue.',
-    choices: [],
-    isEnding: true,
-    endingBadge: 'GALACTIC AMBASSADOR'
-  },
-  'ending-guardian': {
-    id: 'ending-guardian',
-    sceneTitle: 'MISSION CONCLUDED // SILENT GUARDIAN',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'The alien knowledge is safely archived within hardened crystal vaults. You preserved the station and safeguarded human civilization while protecting the secrets of a fallen star empire.',
-    choices: [],
-    isEnding: true,
-    endingBadge: 'AEGIS DEFENDER'
-  },
-  'ending-savior': {
-    id: 'ending-savior',
-    sceneTitle: 'MISSION CONCLUDED // STELLAR RESCUE HERO',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'Your daring warp maneuver pulls the alien seed ship from the gravitational singularity. Thousands of bio-synthetic species are saved, forging an eternal bond of gratitude between worlds.',
-    choices: [],
-    isEnding: true,
-    endingBadge: 'STELLAR RESCUER'
-  },
-  'ending-observer': {
-    id: 'ending-observer',
-    sceneTitle: 'MISSION CONCLUDED // CHRONICLER OF THE COSMOS',
-    visualBackdrop: '/media/portal_last_signal.jpg',
-    narration: 'Your meticulous sensor logs provide Earth with the most detailed cosmological dataset in human history, laying the foundation for future generations of deep space exploration.',
-    choices: [],
-    isEnding: true,
-    endingBadge: 'COSMIC CARTOGRAPHER'
   }
 };
 
@@ -168,223 +229,276 @@ export const LastSignalView: React.FC<LastSignalViewProps> = ({
   visitorPhotoUrl,
   visitorName = 'Cadet Alex',
   onComplete,
-  onExit
+  onExit,
+  onHudUpdate
 }) => {
-  const [currentNodeId, setCurrentNodeId] = useState<string>('scene-intro');
-  const [isWarping, setIsWarping] = useState<boolean>(false);
-  const [warpThrottle, setWarpThrottle] = useState<number>(1.5);
-  const [signalFrequency, setSignalFrequency] = useState<number>(1420.4);
-  const [signalAligned, setSignalAligned] = useState<boolean>(false);
-  const [sensorScanning, setSensorScanning] = useState<boolean>(false);
-  const [showTransmission, setShowTransmission] = useState<boolean>(false);
-  const [choicesHistory, setChoicesHistory] = useState<string[]>([]);
+  const [selectedChoiceId, setSelectedChoiceId] = useState<string | null>(null);
+  const [activeSpeechHint, setActiveSpeechHint] = useState<string | null>(null);
+  const [warpActive, setWarpActive] = useState<boolean>(false);
+  const [resolvedEnding, setResolvedEnding] = useState<BranchEnding | null>(null);
 
-  const node = STORY_GRAPH[currentNodeId] || STORY_GRAPH['scene-intro'];
-
+  // Initialize engine
   useEffect(() => {
     soundFX.playBoot();
+    branchEngine.reset();
   }, []);
 
-  const handleChoice = (choice: StoryChoice) => {
-    soundFX.playWarp();
-    setIsWarping(true);
-    setChoicesHistory(prev => [...prev, choice.text]);
-
-    setTimeout(() => {
-      setIsWarping(false);
-      setCurrentNodeId(choice.targetNodeId);
-      soundFX.playScan();
-    }, 900);
-  };
-
-  const handleTuneFrequency = (delta: number) => {
-    soundFX.playClick();
-    const newFreq = parseFloat((signalFrequency + delta).toFixed(1));
-    setSignalFrequency(newFreq);
-    if (Math.abs(newFreq - 1420.4) < 0.2) {
-      setSignalAligned(true);
-      soundFX.playSuccess();
-    } else {
-      setSignalAligned(false);
-    }
-  };
-
-  const handleFinishStory = () => {
+  const handleFinalSessionComplete = useCallback((results: LevelResult[], finalScore: number) => {
     soundFX.playSuccess();
+    const ending = branchEngine.resolveEnding();
+    setResolvedEnding(ending);
+
+    const weights = branchEngine.getWeights();
+    const totalScoreVal = finalScore + 400;
+
     const souvenirData: SouvenirData = {
       experienceId: 'last-signal',
-      experienceTitle: `MISSION CONCLUDED: ${node.endingBadge || 'COSMIC EXPLORER'}`,
-      experienceSubtitle: `DISCOVERY: ${node.sceneTitle}`,
+      experienceTitle: 'THE LAST SIGNAL // MISSION DOSSIER',
+      experienceSubtitle: ending.title,
       visitorName,
       visitorPhotoUrl: visitorPhotoUrl || '',
-      score: 980,
-      achievements: [
-        'Cosmic Explorer',
-        node.endingBadge || 'Star Voyager',
-        'Harmonic Decrypter',
-        'First Contact Specialist'
-      ],
+      score: totalScoreVal,
+      achievements: [ending.badge, 'Cosmic Arbiter', 'First Contact Emissary', 'Epoch Pilot'],
       metrics: [
-        { label: 'DESTINATION', value: 'PROXIMA D SYSTEM' },
-        { label: 'WARP VELOCITY', value: `${warpThrottle.toFixed(1)}c WARP SPEED` },
-        { label: 'DECISIONS MADE', value: `${choicesHistory.length + 1} PROTOCOLS` },
-        { label: 'CREDENTIAL EARNED', value: node.endingBadge || 'STAR EXPLORER' }
+        { label: 'DIPLOMACY AFFINITY', value: `${weights.diplomacy * 20}%` },
+        { label: 'SCIENCE AFFINITY', value: `${weights.science * 20}%` },
+        { label: 'CONTAINMENT RATING', value: `${weights.containment * 20}%` },
+        { label: 'SIGNAL FIDELITY', value: '100% TRANSMITTED' }
       ],
-      aiAnalysis: `Interstellar flight logs verify successful navigation and harmonic decoding at ${signalFrequency} MHz. Behavioral decision profile: Diplomatic, decisive, and exploratory.`,
+      aiAnalysis: `${ending.summary} Cumulative neural telemetry indicates your primary moral driver was ${ending.badge}. ${ending.quote}`,
       dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       sessionId: 'SIG-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      badge: node.endingBadge || 'COSMIC EXPLORER',
-      themeColor: '#ffaa00'
+      badge: ending.badge,
+      themeColor: ending.themeColor,
+      levelResults: results
     };
 
-    onComplete(souvenirData);
+    setTimeout(() => {
+      onComplete(souvenirData);
+    }, 2000);
+  }, [visitorName, visitorPhotoUrl, onComplete]);
+
+  const {
+    currentLevel,
+    timeRemainingInLevel,
+    currentConfig,
+    transitionInfo,
+    totalScore,
+    advanceLevel,
+    startTimer,
+    isTimerStarted
+  } = useLevelTimer(SIGNAL_LEVEL_CONFIGS, handleFinalSessionComplete);
+
+  // Sync Level HUD with GlobalHUD
+  useEffect(() => {
+    if (onHudUpdate) {
+      onHudUpdate({
+        level: currentLevel,
+        timeRemaining: timeRemainingInLevel,
+        timeBudget: currentConfig.timeBudgetSec,
+        transitionInfo,
+        score: totalScore
+      });
+    }
+  }, [currentLevel, timeRemainingInLevel, currentConfig, transitionInfo, totalScore, onHudUpdate]);
+
+  const currentScenario = CHAPTER_SCENARIOS[currentLevel] || CHAPTER_SCENARIOS[1];
+  const colorGrade = branchEngine.getColorGrade();
+  const weights = branchEngine.getWeights();
+
+  const handleMakeChoice = (choice: LevelScenario['choices'][0]) => {
+    startTimer();
+    soundFX.playClick();
+    setSelectedChoiceId(choice.id);
+    setWarpActive(true);
+
+    // Record in branch engine
+    branchEngine.recordChoice(currentLevel, choice.id, choice.text, choice.delta);
+
+    setTimeout(() => {
+      setWarpActive(false);
+      setSelectedChoiceId(null);
+      advanceLevel(choice.score, 96, choice.text);
+    }, 1200);
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden flex flex-col justify-between pt-20 pb-4 px-3 sm:px-8 space-bg select-none font-display">
-      {/* 3D Cosmic Starfield Warp System */}
-      <StarfieldWarp3D warpSpeed={isWarping} speedMultiplier={warpThrottle} />
+    <div className="relative w-screen h-screen overflow-hidden flex flex-col pt-16 pb-3 px-3 sm:px-6 bg-[#020409] text-slate-100 select-none font-display">
+      
+      {/* Dynamic Three.js Starfield & Warp Mesh (Preserves single WebGL canvas across all 5 levels!) */}
+      <div className="absolute inset-0 z-0">
+        <StarfieldWarp3D warpSpeed={warpActive} speedMultiplier={warpActive ? 4.5 : 1.0} />
+      </div>
 
-      {/* Dynamic Cinematic Backdrop */}
+      {/* Dynamic Ambient Color-Grade Overlay (Reflects dominant branch: Cyan / Green / Magenta / Violet) */}
       <div 
-        className="absolute inset-0 z-0 bg-cover bg-center transition-all duration-1000 transform scale-105 opacity-55 pointer-events-none"
-        style={{ backgroundImage: `url(${node.visualBackdrop})` }}
+        className="absolute inset-0 pointer-events-none transition-colors duration-1000 z-10 opacity-20"
+        style={{
+          background: `radial-gradient(circle at 50% 30%, ${colorGrade.colorHex}, transparent 70%)`
+        }}
       />
-      <div className="absolute inset-0 z-1 pointer-events-none bg-gradient-to-t from-slate-950 via-slate-950/60 to-slate-950/80" />
-      <div className="scanlines absolute inset-0 z-10 pointer-events-none" />
+      <div className="scanlines absolute inset-0 z-10 pointer-events-none opacity-30" />
 
-      {/* TOP FLIGHT BRIDGE TELEMETRY SUB-BAR */}
-      <div className="relative z-20 flex flex-col sm:flex-row items-start sm:items-center justify-between max-w-6xl mx-auto w-full gap-2 mb-2">
-        <div className="flex items-center space-x-2.5">
-          <div className="p-2 rounded-xl bg-amber-950/70 border border-amber-500/40 text-amber-400 shadow-[0_0_15px_rgba(255,170,0,0.3)]">
-            <Radio className="w-5 h-5" />
+      {/* Top Telemetry Header */}
+      <div className="relative z-20 flex flex-wrap items-center justify-between max-w-7xl mx-auto w-full mb-2 gap-2">
+        <div className="flex items-center space-x-2">
+          <div 
+            className="p-2 rounded-xl border shadow-lg transition-colors duration-500"
+            style={{ borderColor: `${colorGrade.colorHex}60`, backgroundColor: `${colorGrade.colorHex}20` }}
+          >
+            <Radio className="w-5 h-5 animate-pulse" style={{ color: colorGrade.colorHex }} />
           </div>
           <div>
-            <div className="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-bold">
-              STARSHIP FLIGHT BRIDGE // THE LAST SIGNAL
-            </div>
-            <h2 className="text-xs sm:text-sm font-bold text-white tracking-wider truncate max-w-sm sm:max-w-md">
-              {node.sceneTitle}
-            </h2>
+            <h1 className="text-sm sm:text-base font-black tracking-wide text-white flex items-center space-x-2">
+              <span>{currentScenario.title}</span>
+            </h1>
+            <p className="text-[10px] font-mono text-slate-400">
+              STATION TIME REMAINING: <span className="font-bold text-amber-400">{timeRemainingInLevel}s</span> {!isTimerStarted && <span className="text-emerald-400 font-bold ml-1">[PAUSED UNTIL START]</span>} | SPECTRUM: <span style={{ color: colorGrade.colorHex }} className="font-bold">{colorGrade.label}</span>
+            </p>
           </div>
         </div>
 
-        {/* Bridge Controls: Warp Throttle & Frequency Array */}
-        <div className="flex items-center space-x-2 shrink-0 font-mono text-xs">
-          {/* Signal Frequency Tuner */}
-          <div className="flex items-center space-x-1.5 bg-slate-950/85 px-3 py-1.5 rounded-xl border border-amber-500/40">
-            <span className="text-amber-400 font-bold hidden sm:inline">ARRAY:</span>
-            <button onClick={() => handleTuneFrequency(-0.1)} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white">◀</button>
-            <span className={`font-bold ${signalAligned ? 'text-emerald-400' : 'text-white'}`}>
-              {signalFrequency.toFixed(1)} MHz
-            </span>
-            <button onClick={() => handleTuneFrequency(0.1)} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white">▶</button>
-            {signalAligned && <span className="text-emerald-400 text-[10px] font-bold">LOCKED!</span>}
-          </div>
-
-          {/* Interactive Warp Throttle Slider */}
-          <div className="flex items-center space-x-1.5 bg-slate-950/85 px-3 py-1.5 rounded-xl border border-amber-500/40">
-            <span className="text-amber-400 font-bold hidden sm:inline">WARP:</span>
-            <input
-              type="range"
-              min="0.5"
-              max="4.0"
-              step="0.1"
-              value={warpThrottle}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                setWarpThrottle(val);
-                soundFX.playClick(300 + val * 120);
-              }}
-              className="w-16 sm:w-24 accent-amber-400 cursor-pointer"
-              title="Adjust Warp Throttle"
-            />
-            <span className="text-white font-bold">{warpThrottle.toFixed(1)}c</span>
-          </div>
-
-          {/* Deep Space Sensor Radar */}
-          <button
-            onClick={() => {
-              soundFX.playScan();
-              setSensorScanning(true);
-              setTimeout(() => setSensorScanning(false), 2000);
-            }}
-            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border transition-all ${
-              sensorScanning
-                ? 'bg-amber-400 text-black border-amber-300 shadow-[0_0_15px_#ffaa00]'
-                : 'bg-slate-950/80 border-amber-500/40 text-amber-300 hover:text-white'
-            }`}
-          >
-            <Compass className={`w-4 h-4 ${sensorScanning ? 'animate-spin' : ''}`} />
-            <span className="hidden md:inline">{sensorScanning ? 'SCANNING...' : 'RADAR'}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* CENTER HOLOGRAPHIC NARRATIVE CARD */}
-      <div className="relative z-20 max-w-4xl mx-auto w-full text-center my-auto py-2">
-        <div className="p-5 sm:p-8 rounded-2xl bg-slate-950/90 border-2 border-amber-500/40 backdrop-blur-xl shadow-[0_0_50px_rgba(0,0,0,0.85)] space-y-4 max-h-[50vh] overflow-y-auto">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-amber-950/60 border border-amber-500/40 text-xs font-mono text-amber-300 shadow-sm">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>AI NARRATIVE ENGINE // IRIS ORBITAL TRANSMISSION</span>
-          </div>
-
-          <p className="text-sm sm:text-lg md:text-xl font-serif text-slate-100 leading-relaxed font-light italic">
-            “{node.narration}”
-          </p>
-
-          {node.isEnding && (
-            <div className="pt-3 flex flex-col items-center space-y-3">
-              <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-xl bg-amber-950/80 border border-amber-400 text-amber-300 font-mono text-xs font-bold shadow-lg">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>EXPEDITION CONCLUDED: {node.endingBadge}</span>
-              </div>
-              <button
-                onClick={handleFinishStory}
-                className="py-3 px-8 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-black font-display font-black text-sm uppercase tracking-wider flex items-center space-x-2 shadow-[0_0_25px_rgba(255,170,0,0.5)] transition-transform active:scale-98"
-              >
-                <span>GENERATE HERO SOUVENIR POSTER</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
+        {/* Live 3-Axis Branch Weight Readout Bar & Timer Start Button */}
+        <div className="flex items-center space-x-2">
+          {!isTimerStarted && (
+            <button
+              onClick={() => { soundFX.playBoot(); startTimer(); }}
+              className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/60 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 animate-pulse transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+            >
+              <Activity className="w-3.5 h-3.5 text-emerald-400" />
+              <span>START TRANSMISSION</span>
+            </button>
           )}
+
+          <div className="flex items-center space-x-3 px-3 py-1.5 rounded-xl bg-slate-950/90 border border-slate-800 backdrop-blur-xl text-[10px] font-mono">
+            <div className="flex items-center space-x-1">
+              <HeartHandshake className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-slate-400">DIPLO:</span>
+              <span className="font-bold text-emerald-400">{weights.diplomacy}</span>
+            </div>
+            <div className="text-slate-700">|</div>
+            <div className="flex items-center space-x-1">
+              <Atom className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-slate-400">SCI:</span>
+              <span className="font-bold text-cyan-400">{weights.science}</span>
+            </div>
+            <div className="text-slate-700">|</div>
+            <div className="flex items-center space-x-1">
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+              <span className="text-slate-400">CONT:</span>
+              <span className="font-bold text-rose-400">{weights.containment}</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* BOTTOM DECISION PROTOCOL MATRIX */}
-      {!node.isEnding && node.choices && (
-        <div className="relative z-20 max-w-5xl mx-auto w-full space-y-2">
-          <div className="text-center text-xs font-mono text-amber-300 font-bold uppercase tracking-wider">
-            CHOOSE YOUR COMMAND PROTOCOL:
+      {/* Main Bridge Interactive Interface */}
+      <div className="relative z-20 flex-1 max-w-5xl mx-auto w-full flex flex-col justify-between py-2 overflow-hidden">
+        
+        {/* Holographic Narration Feed Card */}
+        <div className="p-5 rounded-2xl bg-slate-950/85 border border-slate-800 backdrop-blur-2xl shadow-[0_0_40px_rgba(0,0,0,0.8)] flex flex-col space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div className="flex items-center space-x-2 text-xs font-mono font-bold" style={{ color: colorGrade.colorHex }}>
+              <Terminal className="w-4 h-4" />
+              <span>TRANSMISSION DECODER // {currentScenario.speaker}</span>
+            </div>
+            <div className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-300">
+              PHASE {currentLevel} / 5
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {node.choices.map((choice, idx) => (
+          <p className="text-sm sm:text-base font-sans text-slate-200 leading-relaxed font-normal">
+            {currentScenario.narration}
+          </p>
+        </div>
+
+        {/* Tactical Branching Decisions Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-3">
+          {currentScenario.choices.map((choice) => {
+            const isChosen = selectedChoiceId === choice.id;
+            const branchColor = choice.branch === 'diplomacy' 
+              ? '#10b981' 
+              : choice.branch === 'science' 
+              ? '#00f2fe' 
+              : '#f43f5e';
+
+            return (
               <button
                 key={choice.id}
-                onClick={() => handleChoice(choice)}
-                className="group text-left p-3.5 rounded-xl bg-slate-950/90 border border-amber-500/40 hover:border-amber-400 hover:bg-amber-950/40 transition-all transform hover:-translate-y-0.5 shadow-lg active:scale-98 flex flex-col justify-between"
+                onClick={() => handleMakeChoice(choice)}
+                className={`p-4 rounded-2xl border text-left transition-all duration-300 flex flex-col justify-between group active:scale-95 ${
+                  isChosen
+                    ? 'bg-slate-900 border-white shadow-[0_0_30px_rgba(255,255,255,0.4)] scale-102'
+                    : 'bg-slate-950/90 hover:bg-slate-900/90 border-slate-800 hover:border-slate-600'
+                }`}
               >
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-500/30">
-                      PROTOCOL 0{idx + 1}
+                  <div className="flex items-center justify-between text-[10px] font-mono font-bold uppercase mb-2">
+                    <span style={{ color: branchColor }}>
+                      {choice.branch === 'diplomacy' ? '🕊 DIPLOMACY' : choice.branch === 'science' ? '⚛ SCIENCE' : '🛡 CONTAINMENT'}
                     </span>
-                    <ArrowRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400 transition-colors" />
+                    <span className="text-slate-500 font-normal">VOICE: "{choice.speechTrigger}"</span>
                   </div>
-                  <div className="text-xs font-mono font-bold text-white group-hover:text-amber-200 transition-colors">
+                  <h3 className="text-xs sm:text-sm font-bold text-white mb-2 leading-snug group-hover:text-cyan-300 transition-colors">
                     {choice.text}
-                  </div>
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 leading-relaxed">
+                    {choice.description}
+                  </p>
                 </div>
 
-                <div className="text-[11px] font-sans text-slate-400 mt-2 border-t border-slate-800/80 pt-1.5 line-clamp-2">
-                  {choice.consequence}
+                <div className="mt-4 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] font-mono">
+                  <span className="text-slate-500">AUTHORIZE ROUTE</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-1 group-hover:text-white transition-all" />
                 </div>
               </button>
-            ))}
+            );
+          })}
+        </div>
+
+        {/* Bottom Voice Command Assistant Bar */}
+        <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 backdrop-blur-md flex items-center justify-between text-xs font-mono">
+          <div className="flex items-center space-x-2 text-slate-400">
+            <Mic className="w-4 h-4 text-cyan-400 animate-pulse" />
+            <span>VOICE COMMANDS RECOGNIZED:</span>
+            <span className="text-cyan-300">
+              {currentScenario.choices.map(c => `"${c.speechTrigger}"`).join(' | ')}
+            </span>
+          </div>
+          <div className="hidden sm:block text-slate-500 text-[10px]">
+            SPEECH ENGINE SYNCHRONIZED
+          </div>
+        </div>
+
+      </div>
+
+      {/* Climax Ending Resolved Modal (at Phase 5 finish) */}
+      {resolvedEnding && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-lg animate-in fade-in select-none font-display">
+          <div className="relative max-w-lg w-full p-6 rounded-2xl bg-slate-950 border-2 shadow-2xl text-center" style={{ borderColor: resolvedEnding.themeColor }}>
+            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-mono font-bold mb-3 border bg-slate-900" style={{ color: resolvedEnding.themeColor, borderColor: `${resolvedEnding.themeColor}50` }}>
+              <span>SIGNAL TRANSMISSION COMPLETE</span>
+            </div>
+
+            <h2 className="text-2xl font-black text-white mb-2">
+              {resolvedEnding.title}
+            </h2>
+
+            <p className="text-xs font-mono text-slate-300 mb-4 leading-relaxed">
+              {resolvedEnding.summary}
+            </p>
+
+            <blockquote className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs font-mono italic text-cyan-200 mb-5">
+              {resolvedEnding.quote}
+            </blockquote>
+
+            <div className="text-xs font-mono text-emerald-400">
+              Compiling composite cross-level dossier...
+            </div>
           </div>
         </div>
       )}
+
     </div>
   );
 };

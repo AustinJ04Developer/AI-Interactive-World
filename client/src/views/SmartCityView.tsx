@@ -24,16 +24,24 @@ import {
   ShieldCheck,
   Award
 } from 'lucide-react';
-import type { CityNPC, CitySector, SouvenirData } from '../types';
+import type { CityNPC, CitySector, SouvenirData, LevelResult } from '../types';
 import { aiService } from '../services/aiService';
 import { soundFX } from '../services/audioService';
 import { CityMiniMap, type CityTarget } from '../components/city/CityMiniMap';
+import { useLevelTimer, type LevelConfig } from '../hooks/useLevelTimer';
 
 interface SmartCityViewProps {
   visitorPhotoUrl: string | null;
   visitorName?: string;
   onComplete: (souvenir: SouvenirData) => void;
   onExit: () => void;
+  onHudUpdate?: (hud: {
+    level?: number;
+    timeRemaining?: number;
+    timeBudget?: number;
+    transitionInfo?: any;
+    score?: number;
+  }) => void;
 }
 
 const SECTORS: CitySector[] = [
@@ -151,11 +159,20 @@ const NPCS: CityNPC[] = [
   }
 ];
 
+const CITY_LEVEL_CONFIGS: LevelConfig[] = [
+  { level: 1, label: 'Sector 1: Fusion Grid Station', timeBudgetSec: 45, maxScore: 100 },
+  { level: 2, label: 'Sector 2: Smart Hospital District', timeBudgetSec: 55, maxScore: 150 },
+  { level: 3, label: 'Sector 3: Vertical Agro-Dome', timeBudgetSec: 65, maxScore: 200 },
+  { level: 4, label: 'Sector 4: Municipal Safety AI Core', timeBudgetSec: 65, maxScore: 250 },
+  { level: 5, label: 'Sector 5: Central Metropolitan Monument', timeBudgetSec: 70, maxScore: 300 },
+];
+
 export const SmartCityView: React.FC<SmartCityViewProps> = ({
   visitorPhotoUrl,
   visitorName = 'Cadet Alex',
   onComplete,
-  onExit
+  onExit,
+  onHudUpdate
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
 
@@ -168,7 +185,6 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
   const [cameraMode, setCameraMode] = useState<'chase' | 'cockpit' | 'drone'>('chase');
 
   // Multi-Stage Target Search System
-  const [targetIndex, setTargetIndex] = useState<number>(0);
   const [foundTargets, setFoundTargets] = useState<string[]>([]);
   const [targetPromptAlert, setTargetPromptAlert] = useState<string | null>(null);
   const [atTargetProximity, setAtTargetProximity] = useState<boolean>(false);
@@ -180,6 +196,64 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
   const [isListening, setIsListening] = useState<boolean>(false);
   const [showIntercom, setShowIntercom] = useState<boolean>(false);
 
+  // Universal 5-Level Timer Scaffolding Integration
+  const handleSessionComplete = useCallback((results: LevelResult[], finalScore: number) => {
+    soundFX.playShutter();
+    const totalScoreVal = finalScore + 350;
+    const earnedBadge = results.filter(r => r.completedBeforeTimeout).length >= 4;
+    const souvenirData: SouvenirData = {
+      experienceId: 'smart-city',
+      experienceTitle: 'SMART CITY 2026 // EXPLORER DOSSIER',
+      experienceSubtitle: 'CIVIC NEURAL TELEMETRY ARCHIVE',
+      visitorName,
+      visitorPhotoUrl: visitorPhotoUrl || '',
+      score: totalScoreVal,
+      achievements: ['Grand City Explorer', 'Autonomous Navigator', 'Zero-Emission Racer', 'Neural Grid Master'],
+      metrics: [
+        { label: 'SECTORS CONNECTED', value: `${foundTargets.length} / 5 DISTRICTS` },
+        { label: 'TRANSIT EFFICIENCY', value: `${Math.min(99, 82 + results.length * 3.2)}%` },
+        { label: 'EXPLORATION XP', value: `+${explorerPoints} XP` },
+        { label: 'NETWORK STATUS', value: 'OPTIMAL (NET-ZERO)' }
+      ],
+      aiAnalysis: `Autonomous vehicular exploration logged flawless trajectory across all 5 municipal sectors. Telemetry corroborates ${foundTargets.length} civil telemetry handshakes, maintaining net-zero power drain.`,
+      dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      sessionId: 'CTY-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      badge: earnedBadge ? 'MASTER URBAN PLANNER' : 'CIVIC EXPLORER',
+      themeColor: '#00ff88',
+      levelResults: results
+    };
+
+    setTimeout(() => {
+      onComplete(souvenirData);
+    }, 1500);
+  }, [foundTargets.length, explorerPoints, visitorName, visitorPhotoUrl, onComplete]);
+
+  const {
+    currentLevel,
+    timeRemainingInLevel,
+    currentConfig,
+    transitionInfo,
+    totalScore,
+    advanceLevel,
+    startTimer,
+    isTimerStarted
+  } = useLevelTimer(CITY_LEVEL_CONFIGS, handleSessionComplete);
+
+  const targetIndex = Math.min(currentLevel - 1, SEARCH_TARGETS.length - 1);
+
+  // Sync Level HUD with GlobalHUD
+  useEffect(() => {
+    if (onHudUpdate) {
+      onHudUpdate({
+        level: currentLevel,
+        timeRemaining: timeRemainingInLevel,
+        timeBudget: currentConfig.timeBudgetSec,
+        transitionInfo,
+        score: totalScore + explorerPoints
+      });
+    }
+  }, [currentLevel, timeRemainingInLevel, currentConfig, transitionInfo, totalScore, explorerPoints, onHudUpdate]);
+
   // Virtual Controls input states for mouse/touch
   const virtualControlsRef = useRef({
     forward: false,
@@ -190,7 +264,7 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
     handbrake: false
   });
 
-  const currentTarget = SEARCH_TARGETS[Math.min(targetIndex, SEARCH_TARGETS.length - 1)];
+  const currentTarget = SEARCH_TARGETS[targetIndex];
 
   // Three.js & Vehicle Physics Loop
   useEffect(() => {
@@ -263,31 +337,43 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
     createRoadStrip(6, 120, 0, 20, Math.PI / 2);
     createRoadStrip(6, 120, 0, -20, Math.PI / 2);
 
-    // Procedural Futuristic Skyscrapers
+    // Procedural Futuristic Skyscrapers (Organized into civic blocks with clear corridors)
     const buildingGroup = new THREE.Group();
     scene.add(buildingGroup);
 
     const buildingColors = [0x061933, 0x082447, 0x0c3359, 0x051d38];
     const buildingBoxes: THREE.Box3[] = [];
 
-    for (let i = 0; i < 75; i++) {
-      const h = 8 + Math.random() * 32;
-      const w = 3 + Math.random() * 4;
-      const d = 3 + Math.random() * 4;
+    // Clear urban zones: 36 sleek towers arranged with guaranteed open boulevards
+    for (let i = 0; i < 38; i++) {
+      const h = 10 + Math.random() * 28;
+      const w = 3.5 + Math.random() * 3.5;
+      const d = 3.5 + Math.random() * 3.5;
 
-      const x = (Math.random() - 0.5) * 110;
-      const z = (Math.random() - 0.5) * 110;
+      const x = (Math.random() - 0.5) * 105;
+      const z = (Math.random() - 0.5) * 105;
 
-      // Keep roads & central plaza clear
+      // 1. Guaranteed Clearance around ALL 5 Search Target Plazas (At least 15m open zone)
+      const nearTarget = SEARCH_TARGETS.some(t => Math.hypot(x - t.position[0], z - t.position[2]) < 15);
+      if (nearTarget) continue;
+
+      // 2. Guaranteed Clearance around ALL AI Citizens / NPCs (At least 12m open zone)
+      const nearNPC = NPCS.some(npc => Math.hypot(x - npc.position[0], z - npc.position[2]) < 12);
+      if (nearNPC) continue;
+
+      // 3. Keep Initial Vehicle Spawn & Central Plaza wide open
+      if (Math.hypot(x, z - 12) < 12 || (Math.abs(x) < 9 && Math.abs(z) < 9)) continue;
+
+      // 4. Keep Main Avenues and Transit Boulevards open
       if (Math.abs(x) < 7 || Math.abs(z) < 7) continue;
-      if (Math.abs(x - 20) < 5 || Math.abs(x + 20) < 5) continue;
-      if (Math.abs(z - 20) < 5 || Math.abs(z + 20) < 5) continue;
+      if (Math.abs(x - 20) < 6 || Math.abs(x + 20) < 6) continue;
+      if (Math.abs(z - 20) < 6 || Math.abs(z + 20) < 6) continue;
 
       const geo = new THREE.BoxGeometry(w, h, d);
       const mat = new THREE.MeshStandardMaterial({
         color: buildingColors[Math.floor(Math.random() * buildingColors.length)],
-        roughness: 0.3,
-        metalness: 0.7
+        roughness: 0.35,
+        metalness: 0.65
       });
       const bMesh = new THREE.Mesh(geo, mat);
       bMesh.position.set(x, h / 2, z);
@@ -504,6 +590,11 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
       const isDrifting = keys[' '] || virt.handbrake;
       const wantsNitro = (keys['shift'] || virt.nitro) && currentNitro > 5;
 
+      // Timer starts ONLY when player actually begins moving / controlling the vehicle!
+      if (isAccelerating || isReversing || isSteeringLeft || isSteeringRight) {
+        startTimer();
+      }
+
       // Nitro handling
       let nitroActive = false;
       if (wantsNitro && isAccelerating) {
@@ -523,9 +614,9 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
 
       // Acceleration & Top Speed (Playable arcade feel!)
       const maxForwardSpeed = nitroActive ? 0.72 : 0.42;
-      const maxReverseSpeed = -0.18;
-      const accelRate = nitroActive ? 0.55 : 0.32;
-      const dragRate = isDrifting ? 0.45 : 0.22;
+      const maxReverseSpeed = -0.22;
+      const accelRate = nitroActive ? 0.58 : 0.35;
+      const dragRate = isDrifting ? 0.45 : 0.20;
 
       if (isAccelerating) {
         speed = Math.min(maxForwardSpeed, speed + accelRate * dt);
@@ -538,7 +629,7 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
       }
 
       // Steering with drift dynamics
-      const steerSensitivity = isDrifting ? 2.4 : 1.7;
+      const steerSensitivity = isDrifting ? 2.6 : 1.9;
       if (Math.abs(speed) > 0.01) {
         const steerDir = speed >= 0 ? 1 : -1;
         if (isSteeringLeft) {
@@ -557,6 +648,30 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
       // Update Car Position & Rotation
       const forwardVec = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
       carGroup.position.addScaledVector(forwardVec, speed);
+
+      // Smooth Obstacle & Building Sliding Collision Response (Never gets boxed in or stuck)
+      const carRadius = 1.4;
+      for (const box of buildingBoxes) {
+        if (
+          carGroup.position.x + carRadius > box.min.x &&
+          carGroup.position.x - carRadius < box.max.x &&
+          carGroup.position.z + carRadius > box.min.z &&
+          carGroup.position.z - carRadius < box.max.z
+        ) {
+          const penLeft = (carGroup.position.x + carRadius) - box.min.x;
+          const penRight = box.max.x - (carGroup.position.x - carRadius);
+          const penBack = (carGroup.position.z + carRadius) - box.min.z;
+          const penFront = box.max.z - (carGroup.position.z - carRadius);
+          const minPen = Math.min(penLeft, penRight, penBack, penFront);
+
+          if (minPen === penLeft) carGroup.position.x = box.min.x - carRadius;
+          else if (minPen === penRight) carGroup.position.x = box.max.x + carRadius;
+          else if (minPen === penBack) carGroup.position.z = box.min.z - carRadius;
+          else carGroup.position.z = box.max.z + carRadius;
+
+          speed *= 0.65; // Soft deflection instead of stopping
+        }
+      }
 
       // Clamp within city arena bounds
       carGroup.position.x = THREE.MathUtils.clamp(carGroup.position.x, -58, 58);
@@ -615,7 +730,7 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
         // Radar proximity ping
         soundFX.playProximityPing(distToTarget);
 
-        if (distToTarget < 5.8) {
+        if (distToTarget < 8.0) {
           setAtTargetProximity(true);
         } else {
           setAtTargetProximity(false);
@@ -661,46 +776,21 @@ export const SmartCityView: React.FC<SmartCityViewProps> = ({
     if (!foundTargets.includes(targetId)) {
       setFoundTargets(prev => [...prev, targetId]);
       setExplorerPoints(prev => prev + currentTarget.rewardPoints);
-      setTargetPromptAlert(`✓ OBJECTIVE COMPLETE: Discovered ${currentTarget.title} in ${currentTarget.sectorName}! (+${currentTarget.rewardPoints} XP)`);
+      setTargetPromptAlert(`✓ OBJECTIVE COMPLETE: Discovered ${currentTarget.title} in ${currentTarget.sectorName}! (+${currentConfig.maxScore} XP)`);
 
-      // Advance to next target or allow souvenir generation
-      if (targetIndex < SEARCH_TARGETS.length - 1) {
-        setTimeout(() => {
-          setTargetIndex(prev => prev + 1);
-          setTargetPromptAlert(null);
-        }, 3500);
-      }
+      // Advance to next level via universal scaffolding
+      advanceLevel(currentConfig.maxScore, 95, currentTarget.title);
+      setTimeout(() => {
+        setTargetPromptAlert(null);
+      }, 2500);
     }
   };
 
-  // Generate Souvenir
+  // Generate Souvenir Manual Trigger
   const handleGenerateSouvenir = () => {
     soundFX.playShutter();
-
-    const souvenirData: SouvenirData = {
-      experienceId: 'smart-city',
-      experienceTitle: 'SMART CITY 2050 // EXPLORER DOSSIER',
-      experienceSubtitle: 'CIVIC NEURAL TELEMETRY ARCHIVE',
-      visitorName,
-      visitorPhotoUrl: visitorPhotoUrl || '',
-      score: explorerPoints + 350,
-      achievements: ['Grand City Explorer', 'Autonomous Navigator', 'Zero-Emission Racer', 'Neural Grid Master'],
-      metrics: [
-        { label: 'OBJECTIVES RETRIEVED', value: `${foundTargets.length} / ${SEARCH_TARGETS.length} ANOMALIES` },
-        { label: 'AVERAGE RACING VELOCITY', value: `${speedKmH > 0 ? speedKmH : 108} KM/H` },
-        { label: 'ECOLOGICAL GRID SCORE', value: '100% NET-ZERO' },
-        { label: 'RADAR EFFICIENCY', value: 'OPTIMAL TELEMETRY' }
-      ],
-      aiAnalysis: 'Outstanding metropolitan reconnaissance registered. You navigated complex multi-sector city coordinates using dynamic telemetry radar, discovering all vital civic breakthroughs across energy, healthcare, ecology, and municipal safety.',
-      dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      sessionId: 'CITY-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      badge: 'URBAN INTELLIGENCE ARCHITECT',
-      themeColor: '#00ff88'
-    };
-
-    setTimeout(() => {
-      onComplete(souvenirData);
-    }, 1000);
+    // Finish session early or at completion
+    advanceLevel(currentConfig.maxScore, 90, 'Mission Finalized');
   };
 
   // NPC Intercom selection

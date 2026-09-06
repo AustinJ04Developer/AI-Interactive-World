@@ -18,14 +18,25 @@ import {
   X,
   FileText,
   Award,
-  Share2
+  Share2,
+  CreditCard,
+  RotateCw
 } from 'lucide-react';
 import type { SouvenirData } from '../types';
 import QRCode from 'qrcode';
-import { generateSouvenirPoster } from '../services/souvenirService';
+import { 
+  generateSouvenirPoster, 
+  generateCardFrontCanvas, 
+  generateCardBackCanvas, 
+  generateDualCardPrintCanvas 
+} from '../services/souvenirService';
 import { soundFX } from '../services/audioService';
 import { apiService, resolveAssetUrl } from '../services/apiService';
 import { NovaGuide } from '../components/nova/NovaGuide';
+import { LevelCorrelationPanel } from '../components/hud/LevelCorrelationPanel';
+import { OperativeCard3D } from '../components/souvenir/OperativeCard3D';
+import { BadgeShowcase } from '../components/souvenir/BadgeShowcase';
+import { computeCorrelation, synthesizeDefaultLevelResults } from '../services/correlationEngine';
 
 interface ResultsViewProps {
   data: SouvenirData;
@@ -43,7 +54,10 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   const [posterUrl, setPosterUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState<boolean>(true);
   const [generationStep, setGenerationStep] = useState<string>('SYNTHESIZING HERO SHOT...');
-  const [displayMode, setDisplayMode] = useState<'poster' | 'certificate'>('poster');
+  const [displayMode, setDisplayMode] = useState<'card' | 'poster' | 'correlation'>('card');
+  const [cardFrontUrl, setCardFrontUrl] = useState<string | null>(null);
+  const [cardBackUrl, setCardBackUrl] = useState<string | null>(null);
+  const [dualPrintUrl, setDualPrintUrl] = useState<string | null>(null);
   const [showEmailModal, setShowEmailModal] = useState<boolean>(false);
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
   const [showZoomModal, setShowZoomModal] = useState<boolean>(false);
@@ -134,6 +148,20 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
           setIsGenerating(false);
           soundFX.playSuccess();
         }
+
+        // Step D: Pre-render Double-Sided Operative Card & Dual-Sided Print Sheet
+        try {
+          const front = await generateCardFrontCanvas(data, qrToDraw);
+          const back = await generateCardBackCanvas(data);
+          const dualPrint = await generateDualCardPrintCanvas(data, qrToDraw);
+          if (isMounted) {
+            setCardFrontUrl(front);
+            setCardBackUrl(back);
+            setDualPrintUrl(dualPrint);
+          }
+        } catch (cardErr) {
+          console.warn('Operative card canvas generation notice:', cardErr);
+        }
       } catch (err) {
         console.error('Poster generation failed, using emergency fallback:', err);
         try {
@@ -214,6 +242,30 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     }
   };
 
+  const handleDownloadCardFront = () => {
+    if (!cardFrontUrl) return;
+    const link = document.createElement('a');
+    link.download = `AI-World-Card-Front-${data.sessionId}.png`;
+    link.href = cardFrontUrl;
+    link.click();
+  };
+
+  const handleDownloadCardBack = () => {
+    if (!cardBackUrl) return;
+    const link = document.createElement('a');
+    link.download = `AI-World-Card-Back-${data.sessionId}.png`;
+    link.href = cardBackUrl;
+    link.click();
+  };
+
+  const handleDownloadPrintSheet = () => {
+    if (!dualPrintUrl) return;
+    const link = document.createElement('a');
+    link.download = `AI-World-Printable-Badge-Sheet-${data.sessionId}.png`;
+    link.href = dualPrintUrl;
+    link.click();
+  };
+
   const handlePrint = () => {
     soundFX.playClick();
     window.print();
@@ -230,9 +282,19 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       resultId: backendResult?.resultId || data.sessionId,
       recipientEmail: emailInput.trim(),
       experienceTitle: data.experienceTitle,
+      visitorName: data.visitorName,
       score: data.score,
       xpEarned: 500,
       achievements: data.achievements,
+      badges: (data.achievements || []).map((ach, idx) => ({
+        name: ach,
+        tier: idx === 0 ? 'DIAMOND' : 'CYBER-GOLD',
+        description: `Official ${data.experienceTitle} Accreditation Medal`
+      })),
+      cardFrontUrl: cardFrontUrl || undefined,
+      cardBackUrl: cardBackUrl || undefined,
+      badgePrintUrl: dualPrintUrl || cardFrontUrl || undefined,
+      posterUrl: posterUrl || undefined,
       token: backendResult?.token
     });
 
@@ -251,16 +313,19 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     }
   };
 
+  const resolvedCorrelation = data.correlation || computeCorrelation(data.experienceId, data.levelResults, data.score);
+  const resolvedLevels = (data.levelResults && data.levelResults.length === 5)
+    ? data.levelResults
+    : synthesizeDefaultLevelResults(data.experienceId, data.score);
+
   return (
-    <div className="relative w-screen h-screen overflow-y-auto flex flex-col pt-20 pb-6 px-4 sm:px-8 space-bg select-none">
+    <div className="relative w-screen h-screen overflow-y-auto flex flex-col pt-20 pb-6 px-4 sm:px-8 space-bg">
       <div className="scanlines absolute inset-0 z-10 pointer-events-none" />
 
-      {/* Hidden container dedicated solely for crisp window.print() output */}
-      {posterUrl && (
-        <div id="printable-hero-poster" style={{ display: 'none' }}>
-          <img src={posterUrl} alt="Hero Souvenir Poster Print" />
-        </div>
-      )}
+      {/* Hidden container dedicated solely for crisp window.print() output (Shows 2-Sided Lanyard Badge Layout) */}
+      <div id="printable-hero-poster" style={{ display: 'none' }}>
+        <img src={dualPrintUrl || posterUrl || ''} alt="Operative Lanyard Badge Print" />
+      </div>
 
       {/* Top Header with Completion Ribbon & Mascot */}
       <div className="relative z-20 max-w-7xl mx-auto w-full flex flex-col sm:flex-row items-center justify-between gap-3 mb-3">
@@ -270,20 +335,31 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             <span>MISSION ACCOMPLISHED! +500 XP EARNED</span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-display font-black text-white uppercase tracking-wider">
-            YOUR OFFICIAL <span className="text-cyan-400">HERO POSTER & CERTIFICATE</span>
+            YOUR OFFICIAL <span className="text-cyan-400">OPERATIVE CARD & BADGES</span>
           </h2>
         </div>
 
         <NovaGuide
-          message="Sensational job, Explorer! 🎉"
-          subMessage="Your custom poster is ready to inspect, print, or take home via smartphone QR code!"
+          message="Sensational job, Operative! 🎉"
+          subMessage="Your custom 3D double-sided operative card and badges are ready to inspect, rotate, print, or take home via QR code!"
           mood="hero"
         />
       </div>
 
-      {/* View Mode Toggle: Exhibition Poster vs Certificate Dossier */}
-      <div className="relative z-20 max-w-7xl mx-auto w-full flex items-center justify-between gap-3 mb-3">
-        <div className="flex items-center space-x-2 bg-slate-950/90 p-1 rounded-xl border border-slate-800">
+      {/* View Mode Toggle: Exhibition Poster vs 3D Operative Card vs Badges Vault vs 5-Level Correlation */}
+      <div className="relative z-20 max-w-7xl mx-auto w-full flex flex-wrap items-center justify-between gap-3 mb-3">
+        <div className="flex items-center flex-wrap gap-1.5 bg-slate-950/90 p-1 rounded-xl border border-slate-800">
+          <button
+            onClick={() => { soundFX.playClick(); setDisplayMode('card'); }}
+            className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+              displayMode === 'card' 
+                ? 'bg-cyan-400 text-black shadow-[0_0_15px_rgba(0,242,254,0.4)]' 
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Award className="w-3.5 h-3.5" />
+            <span>🎖️ 3D OPERATIVE BADGE</span>
+          </button>
           <button
             onClick={() => { soundFX.playClick(); setDisplayMode('poster'); }}
             className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
@@ -293,18 +369,18 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>🎨 HERO POSTER SHOWCASE</span>
+            <span>🎨 HERO POSTER</span>
           </button>
           <button
-            onClick={() => { soundFX.playClick(); setDisplayMode('certificate'); }}
+            onClick={() => { soundFX.playClick(); setDisplayMode('correlation'); }}
             className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
-              displayMode === 'certificate' 
+              displayMode === 'correlation' 
                 ? 'bg-cyan-400 text-black shadow-[0_0_15px_rgba(0,242,254,0.4)]' 
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Award className="w-3.5 h-3.5" />
-            <span>📜 OFFICIAL DOSSIER CERTIFICATE</span>
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>📊 5-LEVEL CORRELATION</span>
           </button>
         </div>
 
@@ -320,9 +396,10 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
           <button
             onClick={handlePrint}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-emerald-400 text-emerald-300 text-xs font-mono transition-colors"
+            title="Print 2-Sided Lanyard Badge"
           >
             <Printer className="w-3.5 h-3.5 text-emerald-400" />
-            <span>PRINT SOUVENIR</span>
+            <span>PRINT 2-SIDED BADGE</span>
           </button>
         </div>
       </div>
@@ -432,76 +509,41 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                 </div>
               </div>
             )
-          ) : (
-            /* OFFICIAL CERTIFICATE DOSSIER VIEW */
-            <div className="w-full max-w-lg rounded-2xl p-6 bg-slate-950/90 border-2 border-cyan-400/50 shadow-[0_0_40px_rgba(0,242,254,0.25)] space-y-4 font-mono">
-              <div className="text-center pb-3 border-b border-cyan-500/30">
-                <div className="text-[10px] text-cyan-400 uppercase tracking-widest">
-                  AI INTERACTIVE WORLD • {import.meta.env.VITE_EXHIBITION_NAME?.toUpperCase() || 'SCIENCE EXHIBITION 2026'}
-                </div>
-                <h3 className="text-xl font-display font-black text-white uppercase mt-1">
-                  OFFICIAL EXPLORER COMMENDATION
-                </h3>
-                <div className="text-sm font-display font-bold text-cyan-400 mt-1 uppercase tracking-wider">
-                  AWARDED TO: {data.visitorName?.toUpperCase() || 'CADET ALEX'}
-                </div>
-                <div className="text-xs text-emerald-400 mt-1">
-                  CREDENTIAL VERIFIED • SESSION #{data.sessionId}
-                </div>
-              </div>
+          ) : displayMode === 'correlation' ? (
+            <div className="w-full max-w-2xl animate-in fade-in duration-300">
+              <LevelCorrelationPanel
+                levelResults={resolvedLevels}
+                correlation={resolvedCorrelation}
+                experienceId={data.experienceId}
+                themeColor={data.themeColor}
+              />
+            </div>
+          ) : displayMode === 'card' ? (
+            /* 3D DOUBLE-SIDED OPERATIVE CARD VIEW */
+            <div className="w-full max-w-xl flex flex-col items-center animate-in fade-in duration-300 space-y-4">
+              <OperativeCard3D
+                data={data}
+                qrDataUrl={backendResult?.qrDataUrl || localQrDataUrl}
+                correlation={resolvedCorrelation}
+              />
 
-              <div className="flex items-center space-x-4 p-3 rounded-xl bg-slate-900 border border-slate-800">
-                <div className="w-16 h-16 rounded-xl overflow-hidden border-2 border-cyan-400 bg-black shrink-0">
-                  {data.visitorPhotoUrl ? (
-                    <img
-                      src={resolveAssetUrl(data.visitorPhotoUrl)}
-                      alt="Student Avatar"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-cyan-400">
-                      <User className="w-8 h-8" />
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-white uppercase">{data.badge || 'EXPEDITION HERO'}</div>
-                  <div className="text-[11px] text-cyan-300">{data.experienceTitle}</div>
-                  <div className="text-[10px] text-slate-400">Awarded: {data.dateStr}</div>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs font-bold text-slate-300">MISSION TELEMETRY:</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {data.metrics.map((m, idx) => (
-                    <div key={idx} className="p-2 rounded-lg bg-slate-900/80 border border-slate-800 text-[11px]">
-                      <div className="text-[10px] text-slate-400 uppercase">{m.label}</div>
-                      <div className="font-bold text-cyan-300">{m.value}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-500/30 text-xs font-sans text-slate-200">
-                <span className="font-mono text-cyan-400 font-bold block mb-1">AI CORE EVALUATION:</span>
-                "{data.aiAnalysis}"
-              </div>
-
-              <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px]">
-                <div className="flex items-center space-x-1.5 text-emerald-400">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>PERMANENT BLOCKCHAIN RECORD</span>
+              {/* Card Download & Print Options */}
+              <div className="w-full max-w-sm p-3.5 rounded-2xl bg-slate-950/90 border border-cyan-500/40 shadow-xl flex flex-col space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span className="font-bold text-cyan-400">OFFICIAL 3D OPERATIVE BADGE:</span>
+                  <span>300 DPI HD</span>
                 </div>
                 <button
-                  onClick={handlePrint}
-                  className="px-3 py-1 rounded bg-emerald-500 text-black font-bold flex items-center space-x-1"
+                  onClick={handleDownloadPrintSheet}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-black font-display font-black text-xs uppercase tracking-wider flex items-center justify-center space-x-2 shadow-lg transition-all active:scale-95"
                 >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>PRINT CERTIFICATE</span>
+                  <Printer className="w-4 h-4" />
+                  <span>PRINT BADGE (2-SIDED LANYARD FORMAT)</span>
                 </button>
               </div>
             </div>
+          ) : (
+            null
           )}
         </div>
 
@@ -765,7 +807,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             </div>
 
             <p className="text-xs text-slate-300 font-sans leading-relaxed">
-              Enter your email to receive your personalized high-resolution Science Expo poster, AI commendation, and verified achievements!
+              Enter your email to receive your double-sided 3D Operative Card, all unlocked collectible Badges, and high-resolution Hero Poster directly in your inbox!
             </p>
 
             {emailStatus === 'sent' ? (

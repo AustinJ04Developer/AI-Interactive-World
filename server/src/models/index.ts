@@ -89,18 +89,35 @@ export const ScenarioAssignment = mongoose.model<IScenarioAssignment>('ScenarioA
 /* =========================================================================
    4. EXPERIENCE RESULT MODEL (Authoritative Completion Result)
    ========================================================================= */
+export interface ILevelResult {
+  level: number;
+  label: string;
+  score: number;
+  maxScore: number;
+  timeTakenSec: number;
+  timeBudgetSec: number;
+  completedBeforeTimeout: boolean;
+  accuracy?: number;
+  keyChoice?: string;
+}
+
 export interface IExperienceResult extends Document {
   resultId: string;
   sessionId: string;
   scenarioId: string;
   portal: string;
+  visitorName?: string;
   score: number;
   xpEarned: number;
   level: number;
+  durationSec?: number;
   achievements: string[];
   metrics: { label: string; value: string | number }[];
   aiSummary: string;
   snapshotUrl?: string;
+  levelResults?: ILevelResult[];
+  correlation?: Record<string, any>;
+  compositeArchetype?: string;
   createdAt: Date;
 }
 
@@ -108,10 +125,12 @@ const ExperienceResultSchema = new Schema<IExperienceResult>({
   resultId: { type: String, required: true, unique: true, index: true },
   sessionId: { type: String, required: true, index: true },
   scenarioId: { type: String, required: true },
-  portal: { type: String, required: true },
-  score: { type: Number, required: true },
+  portal: { type: String, required: true, index: true },
+  visitorName: { type: String, default: 'Cadet Alex' },
+  score: { type: Number, required: true, index: true },
   xpEarned: { type: Number, default: 500 },
   level: { type: Number, default: 1 },
+  durationSec: { type: Number, default: 300 },
   achievements: [{ type: String }],
   metrics: [{
     label: { type: String },
@@ -119,7 +138,20 @@ const ExperienceResultSchema = new Schema<IExperienceResult>({
   }],
   aiSummary: { type: String, default: '' },
   snapshotUrl: { type: String },
-  createdAt: { type: Date, default: Date.now }
+  levelResults: [{
+    level: { type: Number },
+    label: { type: String },
+    score: { type: Number },
+    maxScore: { type: Number },
+    timeTakenSec: { type: Number },
+    timeBudgetSec: { type: Number },
+    completedBeforeTimeout: { type: Boolean },
+    accuracy: { type: Number },
+    keyChoice: { type: String }
+  }],
+  correlation: { type: Schema.Types.Mixed },
+  compositeArchetype: { type: String },
+  createdAt: { type: Date, default: Date.now, index: true }
 });
 
 export const ExperienceResult = mongoose.model<IExperienceResult>('ExperienceResult', ExperienceResultSchema);

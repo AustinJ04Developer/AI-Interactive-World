@@ -13,6 +13,7 @@ import { emailRouter } from './routes/emailRoutes.js';
 import { aiRouter } from './routes/aiRoutes.js';
 import { operatorRouter } from './routes/operatorRoutes.js';
 import { healthRouter } from './routes/healthRoutes.js';
+import { adminRouter } from './routes/adminRoutes.js';
 
 const app = express();
 
@@ -42,6 +43,7 @@ app.use('/api/email', emailRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/operator', operatorRouter);
 app.use('/api/system', healthRouter);
+app.use('/api/admin', adminRouter);
 
 // Root informational endpoint
 app.get('/api', (_req, res) => {

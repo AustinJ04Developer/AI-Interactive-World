@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   FileText, 
   Video, 
@@ -12,19 +12,23 @@ import {
   Award, 
   Box, 
   Eye, 
-  Play, 
-  Pause, 
-  Volume2, 
   AlertTriangle,
   Fingerprint,
+  Pin,
   Layers,
-  ChevronRight
+  ChevronRight,
+  MessageSquare,
+  Scale,
+  Activity
 } from 'lucide-react';
-import type { SouvenirData } from '../types';
+import type { SouvenirData, ClueEvidence, Suspect, LevelResult } from '../types';
 import { apiService, type AssignedScenarioResponse } from '../services/apiService';
 import { NovaGuide } from '../components/nova/NovaGuide';
 import { ScenarioCCTVPlayer } from '../components/detective/ScenarioCCTVPlayer';
+import { DetectiveCaseWall } from '../components/detective/DetectiveCaseWall';
+import { SuspectDialogueModal } from '../components/detective/SuspectDialogueModal';
 import { soundFX } from '../services/audioService';
+import { useLevelTimer, type LevelConfig } from '../hooks/useLevelTimer';
 
 interface DetectiveViewProps {
   sessionId: string;
@@ -32,38 +36,131 @@ interface DetectiveViewProps {
   visitorName?: string;
   onComplete: (souvenir: SouvenirData) => void;
   onExit: () => void;
+  onHudUpdate?: (hud: {
+    level?: number;
+    timeRemaining?: number;
+    timeBudget?: number;
+    transitionInfo?: any;
+    score?: number;
+  }) => void;
 }
 
-const getSuspectPhoto = (name: string): string => {
-  if (name.includes('Thorne') || name.includes('Silas')) return '/media/suspect_thorne.jpg';
-  if (name.includes('Elena') || name.includes('Rostova')) return '/media/suspect_elena.jpg';
-  if (name.includes('Finnick') || name.includes('Troy')) return '/media/suspect_finnick.jpg';
-  return '/media/suspect_maya.jpg';
-};
+const DETECTIVE_LEVEL_CONFIGS: LevelConfig[] = [
+  { level: 1, label: 'Phase 1: Crime Scene Holographic Sweep', timeBudgetSec: 45, maxScore: 100 },
+  { level: 2, label: 'Phase 2: Digital Forensics & Log Decryption', timeBudgetSec: 55, maxScore: 150 },
+  { level: 3, label: 'Phase 3: Suspect Interrogation & Polygraph', timeBudgetSec: 65, maxScore: 200 },
+  { level: 4, label: 'Phase 4: Sensor & Evidence Synthesis', timeBudgetSec: 65, maxScore: 250 },
+  { level: 5, label: 'Phase 5: Grand Case Accusation & Verdict', timeBudgetSec: 70, maxScore: 300 },
+];
 
 export const DetectiveView: React.FC<DetectiveViewProps> = ({
   sessionId,
   visitorPhotoUrl,
   visitorName = 'Cadet Alex',
   onComplete,
-  onExit
+  onExit,
+  onHudUpdate
 }) => {
   const [scenario, setScenario] = useState<AssignedScenarioResponse | null>(null);
   const [loadingScenario, setLoadingScenario] = useState<boolean>(true);
   
-  // Responsive workspace tabs for mobile/tablet (< 1024px)
-  const [mobileActiveTab, setMobileActiveTab] = useState<'evidence' | 'inspection' | 'accuse'>('evidence');
+  // Case-Wall pinned evidence tracking (accumulates across levels 1-5)
+  const [pinnedClueIds, setPinnedClueIds] = useState<string[]>(['c1']);
+  const [selectedClue, setSelectedClue] = useState<ClueEvidence | null>(null);
+  const [selectedSuspect, setSelectedSuspect] = useState<Suspect | null>(null);
+  const [isInterrogationOpen, setIsInterrogationOpen] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'case-wall' | 'cctv' | 'suspects' | 'accuse'>('case-wall');
   
-  // Left column drawer tab (clues vs suspects)
-  const [drawerTab, setDrawerTab] = useState<'clues' | 'suspects'>('clues');
-  
-  const [selectedClue, setSelectedClue] = useState<any>(null);
-  const [selectedSuspect, setSelectedSuspect] = useState<any>(null);
-  const [aiDeduction, setAiDeduction] = useState<string>('Select any clue or suspect to cross-examine forensic telemetry.');
-  const [solved, setSolved] = useState<boolean>(false);
-  const [showHelp, setShowHelp] = useState<boolean>(false);
+  // Multi-tier NOVA AI hints
+  const [novaTier, setNovaTier] = useState<1 | 2 | 3>(1);
+  const [aiDeduction, setAiDeduction] = useState<string>('Examine crime scene clues and cross-reference timestamps with suspect statements.');
+  const [interrogatedSuspects, setInterrogatedSuspects] = useState<Record<string, { tested: boolean; isContradiction: boolean; stress: number }>>({});
+  const [isDebriefing, setIsDebriefing] = useState<boolean>(false);
+  const [debriefOutcome, setDebriefOutcome] = useState<{ isCorrect: boolean; culpritName: string; explanation: string } | null>(null);
 
-  // Fetch scenario on mount
+  const updateNovaDeduction = useCallback((tier: 1 | 2 | 3, clue: ClueEvidence | null, scen: AssignedScenarioResponse | null) => {
+    if (tier === 1) {
+      if (clue) {
+        setAiDeduction(`[DIRECT OBSERVATION] Clue "${clue.title}" logged at ${clue.timestamp}: ${clue.details}`);
+      } else {
+        setAiDeduction('Examine crime scene clues and cross-reference timestamps with suspect statements.');
+      }
+    } else if (tier === 2) {
+      setAiDeduction(`[GUIDED FORENSICS] Notice the access log at 02:14. One suspect claims an airtight alibi, but biometric access telemetry records their presence inside the restricted vault!`);
+    } else {
+      const culprit = scen?.content?.culpritName || 'Ava Cross';
+      const reason = scen?.content?.solutionReason || 'Keycard and biometric timeline logs contradict their alibi.';
+      setAiDeduction(`[CRITICAL FORENSIC MATCH] Sensor synthesis confirms the intruder is ${culprit}! Telemetry proof: ${reason} File charges against ${culprit} to convict!`);
+    }
+  }, []);
+
+  // Universal 5-Level Scaffolding Completion
+  const handleSessionComplete = useCallback((results: LevelResult[], finalScore: number) => {
+    soundFX.playShutter();
+
+    const isAccusationCorrect = debriefOutcome?.isCorrect ?? false;
+    const priorLevelsCompletedWithoutTimeout = results.slice(0, 4).filter(r => r.completedBeforeTimeout).length;
+    const earnedBadge = isAccusationCorrect && priorLevelsCompletedWithoutTimeout >= 3;
+
+    const totalScoreVal = finalScore + (isAccusationCorrect ? 450 : 200);
+
+    const souvenirData: SouvenirData = {
+      experienceId: 'detective',
+      experienceTitle: 'SUPER DETECTIVE // CASE REPORT',
+      experienceSubtitle: isAccusationCorrect ? 'CASE SOLVED: CULPRIT APPREHENDED' : 'CASE CONCLUDED: FORENSIC DEBRIEF',
+      visitorName,
+      visitorPhotoUrl: visitorPhotoUrl || '',
+      score: totalScoreVal,
+      achievements: isAccusationCorrect
+        ? ['Master Detective', 'Contradiction Hunter', 'Polygraph Expert', 'Evidence Synthesizer']
+        : ['Forensic Analyst', 'Investigative Grit'],
+      metrics: [
+        { label: 'EVIDENCE PINNED', value: `${pinnedClueIds.length} ARTIFACTS` },
+        { label: 'FORENSIC ACCURACY', value: isAccusationCorrect ? '98.5%' : '65.0%' },
+        { label: 'CASE TIMELINE', value: '5 PHASES SYNCHRONIZED' },
+        { label: 'CONTRADICTIONS EXPOSED', value: `${isAccusationCorrect ? 3 : 1} FLAGS` }
+      ],
+      aiAnalysis: isAccusationCorrect
+        ? `Brilliant deductive reasoning. You mapped ${pinnedClueIds.length} corroborating clues across the case-wall, caught critical polygraph tells, and identified ${debriefOutcome?.culpritName} without flaw.`
+        : `Comprehensive case debrief filed. While the initial accusation encountered contradictory telemetry, your forensic analysis recovered essential evidence across all 5 operational phases.`,
+      dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      sessionId: 'DET-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      badge: earnedBadge ? 'MASTER DETECTIVE' : 'FORENSIC CADET',
+      themeColor: '#00f2fe',
+      levelResults: results
+    };
+
+    setTimeout(() => {
+      onComplete(souvenirData);
+    }, 1500);
+  }, [debriefOutcome, pinnedClueIds.length, visitorName, visitorPhotoUrl, onComplete]);
+
+  const {
+    currentLevel,
+    timeRemainingInLevel,
+    currentConfig,
+    transitionInfo,
+    totalScore,
+    advanceLevel,
+    timeoutLevel,
+    startTimer,
+    isTimerStarted
+  } = useLevelTimer(DETECTIVE_LEVEL_CONFIGS, handleSessionComplete);
+
+  // Sync Level HUD with GlobalHUD
+  useEffect(() => {
+    if (onHudUpdate) {
+      onHudUpdate({
+        level: currentLevel,
+        timeRemaining: timeRemainingInLevel,
+        timeBudget: currentConfig.timeBudgetSec,
+        transitionInfo,
+        score: totalScore
+      });
+    }
+  }, [currentLevel, timeRemainingInLevel, currentConfig, transitionInfo, totalScore, onHudUpdate]);
+
+  // Fetch assigned scenario on mount
   useEffect(() => {
     soundFX.playBoot();
     apiService.fetchScenario('detective', sessionId).then((data) => {
@@ -76,271 +173,304 @@ export const DetectiveView: React.FC<DetectiveViewProps> = ({
     });
   }, [sessionId]);
 
-  const handleInspectClue = async (clue: any) => {
+  const clues: ClueEvidence[] = useMemo(() => {
+    if (!scenario?.content?.clues) return [];
+    return scenario.content.clues.map((c: any, idx: number) => ({
+      ...c,
+      level: (idx % 5) + 1,
+      unlocked: true,
+      isPinned: pinnedClueIds.includes(c.id)
+    }));
+  }, [scenario, pinnedClueIds]);
+
+  const suspects: Suspect[] = useMemo(() => {
+    if (!scenario?.content?.suspects) return [];
+    return scenario.content.suspects.map((s: any) => ({
+      ...s,
+      isCulprit: s.id === scenario.content.culpritId || s.name === scenario.content.culpritName
+    }));
+  }, [scenario]);
+
+  const handleTogglePinClue = (clueId: string) => {
+    startTimer();
+    soundFX.playClick();
+    setPinnedClueIds(prev => {
+      if (prev.includes(clueId)) {
+        return prev.filter(id => id !== clueId);
+      } else {
+        return [...prev, clueId];
+      }
+    });
+  };
+
+  const handleInspectClue = async (clue: ClueEvidence) => {
+    startTimer();
     soundFX.playClick();
     setSelectedClue(clue);
     soundFX.playAIProcess();
-    setAiDeduction('NOVA neural coprocessor is cross-referencing timeline timestamps...');
 
-    const res = await apiService.talkToAI({
-      action: 'detective',
-      clueTitle: clue.title,
-      suspectName: selectedSuspect?.name || 'Target Suspect',
-      scenarioTitle: scenario?.title || 'Investigation'
-    });
+    updateNovaDeduction(novaTier, clue, scenario);
 
-    if (res?.text) {
-      setAiDeduction(res.text);
-    } else {
-      setAiDeduction(`Forensic Analysis: "${clue.details}" Correlate timestamp with witness logs to identify who had physical access.`);
+    // Auto-progress level 1 or 2 if examining clues
+    if (currentLevel === 1 && pinnedClueIds.length >= 2) {
+      advanceLevel(currentConfig.maxScore, 95, `Evidence Swept: ${clue.title}`);
+    } else if (currentLevel === 2 && pinnedClueIds.length >= 3) {
+      advanceLevel(currentConfig.maxScore, 92, `Decryption Verified: ${clue.title}`);
     }
   };
 
-  const handleSelectSuspect = (suspect: any) => {
+  const handleOpenInterrogation = (suspect: Suspect) => {
+    startTimer();
     soundFX.playClick();
     setSelectedSuspect(suspect);
-    soundFX.playAIProcess();
-    setAiDeduction(`Cross-examining ${suspect.name}. Stated Alibi: "${suspect.alibi}". Check the clue timestamps to verify whether this alibi holds up!`);
+    setIsInterrogationOpen(true);
   };
 
-  const handleAccusation = async (suspect: any) => {
+  const handlePinTestimony = (testimony: string) => {
+    soundFX.playClick();
+    if (selectedSuspect) {
+      setInterrogatedSuspects(prev => ({
+        ...prev,
+        [selectedSuspect.id]: {
+          tested: true,
+          isContradiction: selectedSuspect.isCulprit,
+          stress: selectedSuspect.isCulprit ? 92 : 24
+        }
+      }));
+    }
+    // Advance Phase 3 on active interrogation testimony
+    if (currentLevel === 3) {
+      advanceLevel(currentConfig.maxScore, 90, `Testimony Logged: ${selectedSuspect?.name}`);
+    }
+    setAiDeduction(`[TESTIMONY PINNED] Polygraph result for ${selectedSuspect?.name}: ${selectedSuspect?.isCulprit ? '⚠ SEVERE BIOMETRIC STRESS (92%) — CONTRADICTION DETECTED!' : '✓ Normal stress levels (24%) — Statement corroborated.'}`);
+    setIsInterrogationOpen(false);
+  };
+
+  const getSuspectPhoto = (name: string): string => {
+    if (name.includes('Thorne') || name.includes('Silas') || name.includes('Vance')) return '/media/suspect_thorne.jpg';
+    if (name.includes('Elena') || name.includes('Rostova') || name.includes('Ava') || name.includes('Evelyn')) return '/media/suspect_elena.jpg';
+    if (name.includes('Finnick') || name.includes('Troy') || name.includes('Drake') || name.includes('Marcus')) return '/media/suspect_finnick.jpg';
+    return '/media/suspect_maya.jpg';
+  };
+
+  const handleAccusation = (suspect: Suspect) => {
     soundFX.playWarp();
-    const isCorrect = suspect.id === scenario?.content?.culpritId || suspect.name === scenario?.content?.culpritName;
-    setSolved(true);
+    const isCorrect = suspect.isCulprit;
+    const culpritName = scenario?.content?.culpritName || 'Ava Cross';
+    const explanation = scenario?.content?.solutionReason || 'Keycard and biometric timeline logs contradict their alibi.';
 
-    const score = isCorrect ? 950 : 420;
-    const xp = isCorrect ? 500 : 150;
-    const achievements = isCorrect 
-      ? ['Super Detective', 'Case Master', 'Forensic Genius', 'Contradiction Hunter'] 
-      : ['Junior Detective', 'Investigative Effort'];
+    setDebriefOutcome({
+      isCorrect,
+      culpritName,
+      explanation
+    });
+    setIsDebriefing(true);
 
-    const realCulprit = scenario?.content?.culpritName || 'the real intruder';
-    const solutionReason = scenario?.content?.solutionReason || 'Forensic timeline logs contradict their presence.';
-
-    const aiSummary = isCorrect
-      ? `CASE SOLVED! Outstanding deduction! You correctly identified ${suspect.name} as the culprit. Key Evidence: ${solutionReason}`
-      : `FALSE ARREST DEBRIEF: You accused ${suspect.name}, but they are INNOCENT! Stated Alibi: "${suspect.alibi}". Security checkpoint records verified their presence elsewhere. The TRUE culprit was ${realCulprit} — ${solutionReason}`;
-
-    const metrics = [
-      { label: 'MYSTERY CASE', value: scenario?.title || 'The Mystery Lab' },
-      { label: 'FINAL VERDICT', value: isCorrect ? 'SOLVED: CULPRIT JAILED' : 'FALSE ACCUSATION' },
-      { label: isCorrect ? 'CONVICTED CULPRIT' : 'ACCUSED (INNOCENT)', value: suspect.name },
-      { label: isCorrect ? 'XP REWARD' : 'TRUE CULPRIT WAS', value: isCorrect ? `+${xp} XP` : realCulprit }
-    ];
-
-    const souvenirData: SouvenirData = {
-      experienceId: 'detective',
-      experienceTitle: isCorrect ? `CASE SOLVED: ${scenario?.title || 'SUPER DETECTIVE'}` : `INQUEST REPORT: ${scenario?.title || 'SUPER DETECTIVE'}`,
-      experienceSubtitle: isCorrect ? 'VERDICT: CULPRIT CONVICTED WITH PROOF' : `VERDICT: INNOCENT ARRESTED — TRUE CULPRIT: ${realCulprit.toUpperCase()}`,
-      visitorName,
-      visitorPhotoUrl: visitorPhotoUrl || '',
-      score,
-      achievements,
-      metrics,
-      aiAnalysis: aiSummary,
-      dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      sessionId,
-      badge: isCorrect ? 'SUPER DETECTIVE ELITE' : 'FORENSIC INVESTIGATOR',
-      themeColor: isCorrect ? '#00f2fe' : '#ff007f'
-    };
-
-    setTimeout(() => {
-      onComplete(souvenirData);
-    }, 1000);
+    if (isCorrect) {
+      soundFX.playSuccess();
+      advanceLevel(currentConfig.maxScore, 98, `Accused: ${suspect.name} (Correct)`);
+    } else {
+      soundFX.playAlert();
+      // Non-fatal wrong accusation: debrief educates cadet, auto-resolves level
+      advanceLevel(Math.floor(currentConfig.maxScore * 0.4), 65, `Debrief: Accused ${suspect.name}`);
+    }
   };
-
-  if (loadingScenario) {
-    return (
-      <div className="w-screen h-screen bg-[#020408] text-white flex flex-col items-center justify-center space-y-4 font-display">
-        <div className="w-12 h-12 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
-        <div className="text-cyan-400 font-bold tracking-wider text-sm">
-          INITIALIZING FORENSIC CASE FILE...
-        </div>
-      </div>
-    );
-  }
-
-  const clues = scenario?.content?.clues || [];
-  const suspects = scenario?.content?.suspects || [];
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden flex flex-col pt-20 pb-4 px-3 sm:px-6 space-bg select-none">
-      <div className="scanlines absolute inset-0 z-10 pointer-events-none" />
+    <div className="relative w-full h-full flex flex-col bg-gradient-to-b from-[#020408] via-[#050b18] to-black text-white p-3 sm:p-5 overflow-hidden select-none font-sans">
+      <div className="scanlines absolute inset-0 pointer-events-none opacity-20" />
 
-      {/* TOP SCENARIO STATUS HEADER */}
-      <div className="relative z-20 flex flex-col md:flex-row items-start md:items-center justify-between max-w-7xl mx-auto w-full gap-2 mb-2">
+      {/* Top Detective Tactical Bar */}
+      <div className="relative z-20 flex flex-wrap items-center justify-between pb-3 border-b border-cyan-500/20 gap-2">
         <div className="flex items-center space-x-3">
-          <div className="p-2 rounded-xl bg-cyan-950/70 border border-cyan-400 text-cyan-300 shadow-[0_0_15px_rgba(0,242,254,0.3)]">
-            <Search className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-cyan-950/80 border border-cyan-400 flex items-center justify-center shadow-[0_0_15px_rgba(0,242,254,0.3)]">
+            <Search className="w-5 h-5 text-cyan-400" />
           </div>
           <div>
-            <div className="flex items-center space-x-2 text-[10px] font-mono">
-              <span className="text-cyan-400 font-bold">CASE ID: {scenario?.scenarioId || 'DET-001'}</span>
-              <span className="text-slate-500">•</span>
-              <span className="text-emerald-400 font-bold uppercase">{scenario?.difficulty || 'EASY'}</span>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-mono font-bold text-cyan-400 tracking-wider">
+                SUPER DETECTIVE // V2.0
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300">
+                EVIDENCE PINNED: {pinnedClueIds.length}
+              </span>
             </div>
-            <h2 className="text-base sm:text-xl font-display font-black text-white tracking-wide truncate max-w-lg">
-              {scenario?.title || 'The Vanishing Quantum Prototype'}
+            <h2 className="text-base sm:text-lg font-black text-white leading-tight">
+              {scenario?.title || 'QUANTUM CORE SABOTAGE'}
             </h2>
           </div>
         </div>
 
-        {/* Mascot Prompt Bar */}
-        <NovaGuide
-          message="Examine clues & alibis to find the contradiction!"
-          subMessage="Compare timestamps to uncover who is lying."
-          mood="thinking"
-          actionText="QUICK GUIDE"
-          onAction={() => setShowHelp(prev => !prev)}
-        />
-      </div>
+        {/* View Switcher Tabs & Timer Status */}
+        <div className="flex items-center space-x-2">
+          {!isTimerStarted && (
+            <button
+              onClick={() => { soundFX.playBoot(); startTimer(); }}
+              className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/60 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 animate-pulse transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+            >
+              <Activity className="w-3.5 h-3.5 text-emerald-400" />
+              <span>START INVESTIGATION</span>
+            </button>
+          )}
 
-      {/* INSTRUCTIONS POPUP OVERLAY */}
-      {showHelp && (
-        <div className="relative z-30 max-w-7xl mx-auto w-full p-3 rounded-xl bg-slate-950/95 border-2 border-cyan-400 text-xs font-mono text-cyan-200 flex items-center justify-between shadow-2xl mb-2 animate-in fade-in duration-150">
-          <div className="flex flex-wrap items-center gap-4">
-            <span>1. Click Clues to examine CCTV, Audio & 3D telemetry 🔎</span>
-            <span>2. Toggle UV LENS to expose hidden digital checksums 🟣</span>
-            <span>3. Cross-reference suspect alibis and hit ACCUSE! 🏆</span>
+          <div className="flex items-center space-x-1 p-1 rounded-xl bg-slate-950/90 border border-slate-800">
+            <button
+              onClick={() => { soundFX.playClick(); startTimer(); setActiveTab('case-wall'); }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center space-x-1.5 transition-all ${
+                activeTab === 'case-wall' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Pin className="w-3.5 h-3.5" />
+              <span>CASE-WALL</span>
+            </button>
+            <button
+              onClick={() => { soundFX.playClick(); startTimer(); setActiveTab('cctv'); }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center space-x-1.5 transition-all ${
+                activeTab === 'cctv' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Video className="w-3.5 h-3.5" />
+              <span>CCTV FEED</span>
+            </button>
+            <button
+              onClick={() => { soundFX.playClick(); startTimer(); setActiveTab('suspects'); }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center space-x-1.5 transition-all ${
+                activeTab === 'suspects' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Scale className="w-3.5 h-3.5" />
+              <span>INTERROGATION</span>
+            </button>
           </div>
-          <button onClick={() => setShowHelp(false)} className="text-white font-bold underline ml-2">
-            CLOSE
+        </div>
+
+        {/* NOVA AI Scaling Hint Tier Selector */}
+        <div className="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-xl bg-slate-950/90 border border-cyan-500/30 text-[11px] font-mono">
+          <span className="text-slate-400 font-bold">NOVA HINT TIER:</span>
+          <button
+            onClick={() => {
+              setNovaTier(1);
+              updateNovaDeduction(1, selectedClue, scenario);
+            }}
+            className={`px-2 py-0.5 rounded ${novaTier === 1 ? 'bg-cyan-500 text-black font-bold' : 'text-slate-400 hover:text-white'}`}
+            title="Tier 1: Direct Observation"
+          >
+            DIRECT
+          </button>
+          <button
+            onClick={() => {
+              setNovaTier(2);
+              updateNovaDeduction(2, selectedClue, scenario);
+            }}
+            className={`px-2 py-0.5 rounded ${novaTier === 2 ? 'bg-amber-500 text-black font-bold' : 'text-slate-400 hover:text-white'}`}
+            title="Tier 2: Guided Association"
+          >
+            GUIDED
+          </button>
+          <button
+            onClick={() => {
+              setNovaTier(3);
+              updateNovaDeduction(3, selectedClue, scenario);
+            }}
+            className={`px-2 py-0.5 rounded ${novaTier === 3 ? 'bg-violet-500 text-white font-bold' : 'text-slate-400 hover:text-white'}`}
+            title="Tier 3: Socratic Provocation"
+          >
+            SOCRATIC
           </button>
         </div>
-      )}
-
-      {/* MOBILE RESPONSIVE TAB BAR (VISIBLE ON SCREENS < 1024px) */}
-      <div className="lg:hidden relative z-20 flex space-x-1.5 mb-2 bg-slate-950/90 p-1 rounded-xl border border-slate-800">
-        <button
-          onClick={() => setMobileActiveTab('evidence')}
-          className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
-            mobileActiveTab === 'evidence' ? 'bg-cyan-500 text-black shadow-md' : 'text-slate-400'
-          }`}
-        >
-          1. EVIDENCE ({clues.length})
-        </button>
-        <button
-          onClick={() => setMobileActiveTab('inspection')}
-          className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
-            mobileActiveTab === 'inspection' ? 'bg-cyan-500 text-black shadow-md' : 'text-slate-400'
-          }`}
-        >
-          2. CRIME DESK
-        </button>
-        <button
-          onClick={() => setMobileActiveTab('accuse')}
-          className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
-            mobileActiveTab === 'accuse' ? 'bg-cyan-500 text-black shadow-md' : 'text-slate-400'
-          }`}
-        >
-          3. ACCUSE ({suspects.length})
-        </button>
       </div>
 
-      {/* MAIN 3-ZONE INVESTIGATION WORKSPACE */}
-      <div className="relative z-20 grid grid-cols-1 lg:grid-cols-12 gap-3 max-w-7xl mx-auto w-full flex-1 overflow-hidden">
+      {/* Main Forensic Workspace */}
+      <div className="relative z-20 flex-1 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-hidden mt-3">
         
-        {/* ================= ZONE 1: EVIDENCE & SUSPECT DOSSIER DRAWER (4 COLS) ================= */}
-        <div className={`lg:col-span-4 flex flex-col rounded-2xl hologram-panel border border-cyan-500/30 p-3 bg-slate-950/80 backdrop-blur-xl space-y-2.5 overflow-hidden ${
-          mobileActiveTab === 'evidence' ? 'flex' : 'hidden lg:flex'
-        }`}>
-          {/* Switcher Buttons */}
-          <div className="flex space-x-1 p-1 rounded-xl bg-slate-900 border border-slate-800">
-            <button
-              onClick={() => { setDrawerTab('clues'); soundFX.playClick(); }}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
-                drawerTab === 'clues' ? 'bg-cyan-400 text-black shadow-md' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              EVIDENCE CLUES ({clues.length})
-            </button>
-            <button
-              onClick={() => { setDrawerTab('suspects'); soundFX.playClick(); }}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
-                drawerTab === 'suspects' ? 'bg-cyan-400 text-black shadow-md' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              SUSPECT ALIBIS ({suspects.length})
-            </button>
-          </div>
-
-          {/* Clues List */}
-          {drawerTab === 'clues' && (
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-              {clues.map((clue: any) => {
-                const isSelected = selectedClue?.id === clue.id;
-                return (
-                  <div
-                    key={clue.id}
-                    onClick={() => handleInspectClue(clue)}
-                    className={`p-2.5 rounded-xl border cursor-pointer transition-all ${
-                      isSelected
-                        ? 'bg-cyan-950/80 border-cyan-400 shadow-[0_0_15px_rgba(0,242,254,0.25)]'
-                        : 'bg-slate-900/70 border-slate-800 hover:border-slate-600'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-[11px] font-mono mb-1">
-                      <span className="text-cyan-300 font-bold flex items-center space-x-1.5">
-                        {clue.category === 'CCTV' && <Video className="w-3.5 h-3.5 text-cyan-400" />}
-                        {clue.category === 'AUDIO' && <Mic className="w-3.5 h-3.5 text-emerald-400" />}
-                        {clue.category === 'DOCUMENT' && <FileText className="w-3.5 h-3.5 text-amber-400" />}
-                        {clue.category === 'BIOMETRIC' && <Fingerprint className="w-3.5 h-3.5 text-purple-400" />}
-                        <span className="truncate max-w-[170px]">{clue.title}</span>
-                      </span>
-                      <span className="text-[10px] text-slate-400 font-mono px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800">
-                        {clue.timestamp}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-300 font-sans line-clamp-2">
-                      {clue.details}
-                    </p>
-                  </div>
-                );
-              })}
+        {/* Left Interactive Zone: Case Wall OR CCTV OR Suspect Grid (8 Cols) */}
+        <div className="lg:col-span-8 flex flex-col overflow-hidden rounded-2xl border border-slate-800/80 bg-slate-950/80 shadow-2xl">
+          {activeTab === 'case-wall' && (
+            <div className="flex-1 overflow-hidden p-2">
+              <DetectiveCaseWall
+                clues={clues}
+                suspects={suspects}
+                pinnedClueIds={pinnedClueIds}
+                selectedSuspectId={selectedSuspect?.id || null}
+                onTogglePinClue={handleTogglePinClue}
+                onSelectClue={handleInspectClue}
+                onSelectSuspect={(s) => {
+                  setSelectedSuspect(s);
+                  handleOpenInterrogation(s);
+                }}
+              />
             </div>
           )}
 
-          {/* Suspects List */}
-          {drawerTab === 'suspects' && (
-            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-              {suspects.map((suspect: any) => {
-                const isSelected = selectedSuspect?.id === suspect.id;
-                const photoSrc = getSuspectPhoto(suspect.name);
+          {activeTab === 'cctv' && (
+            <div className="flex-1 p-4 flex flex-col justify-center">
+              <ScenarioCCTVPlayer scenario={scenario} selectedClue={selectedClue} />
+            </div>
+          )}
+
+          {activeTab === 'suspects' && (
+            <div className="flex-1 p-4 overflow-y-auto grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {suspects.map(s => {
+                const testRecord = interrogatedSuspects[s.id];
                 return (
-                  <div
-                    key={suspect.id}
-                    onClick={() => handleSelectSuspect(suspect)}
-                    className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                      isSelected
-                        ? 'bg-cyan-950/90 border-cyan-400 shadow-[0_0_15px_rgba(0,242,254,0.3)]'
-                        : 'bg-slate-900/80 border-slate-800 hover:border-slate-600'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-3 mb-2">
-                      <div className="w-10 h-10 rounded-xl overflow-hidden border border-cyan-400/60 shrink-0 bg-slate-950 shadow-sm">
-                        <img src={photoSrc} alt={suspect.name} className="w-full h-full object-cover" />
+                  <div key={s.id} className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center space-x-3 mb-2">
+                        <img
+                          src={getSuspectPhoto(s.name)}
+                          alt={s.name}
+                          className="w-12 h-12 rounded-lg object-cover border border-cyan-400/50 shrink-0"
+                        />
+                        <div>
+                          <h4 className="font-bold text-white leading-tight">{s.name}</h4>
+                          <p className="text-[11px] font-mono text-cyan-400">{s.role}</p>
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-mono font-bold text-white flex items-center justify-between">
-                          <span className="truncate">{suspect.name}</span>
-                          {isSelected && (
-                            <span className="text-[9px] font-mono text-cyan-400 bg-cyan-950 px-1.5 py-0.5 rounded border border-cyan-500/40">
-                              ACTIVE INQUIRY
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-cyan-300 font-mono truncate">
-                          {suspect.role}
-                        </div>
+
+                      <p className="text-xs font-sans text-slate-300 italic bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+                        “{s.alibi}”
+                      </p>
+
+                      {/* Polygraph / Telemetry Verification Badge */}
+                      <div className="mt-2.5">
+                        {testRecord ? (
+                          testRecord.isContradiction ? (
+                            <div className="p-2 rounded-lg bg-red-950/80 border border-red-500/80 text-red-300 font-mono text-[10px] font-bold flex items-center space-x-1.5 animate-pulse">
+                              <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                              <span>STRESS 92% • CONTRADICTION DETECTED!</span>
+                            </div>
+                          ) : (
+                            <div className="p-2 rounded-lg bg-emerald-950/80 border border-emerald-500/80 text-emerald-300 font-mono text-[10px] font-bold flex items-center space-x-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <span>STRESS 24% • ALIBI CORROBORATED</span>
+                            </div>
+                          )
+                        ) : (
+                          <div className="p-1.5 rounded-lg bg-slate-950/80 border border-slate-800 text-slate-400 font-mono text-[10px] flex items-center space-x-1.5">
+                            <Activity className="w-3 h-3 text-cyan-400" />
+                            <span>POLYGRAPH TEST PENDING</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    {/* Full Stated Alibi without line-clamp */}
-                    <div className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 text-[11px] text-amber-200/90 font-sans leading-relaxed">
-                      <span className="text-[10px] font-mono font-bold text-amber-400 block mb-0.5 uppercase tracking-wider">
-                        STATED ALIBI:
-                      </span>
-                      "{suspect.alibi}"
+                    <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                      <button
+                        onClick={() => handleOpenInterrogation(s)}
+                        className="w-full py-2 rounded-lg bg-cyan-950 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900 font-mono text-xs font-bold transition-all"
+                      >
+                        INTERROGATE
+                      </button>
+                      <button
+                        onClick={() => handleAccusation(s)}
+                        className={`w-full py-2.5 rounded-lg font-mono text-xs font-black shadow-lg transition-all ${
+                          testRecord?.isContradiction
+                            ? 'bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white animate-pulse'
+                            : 'bg-rose-600 hover:bg-rose-500 text-white'
+                        }`}
+                      >
+                        FILE CHARGES (ACCUSE)
+                      </button>
                     </div>
                   </div>
                 );
@@ -349,85 +479,111 @@ export const DetectiveView: React.FC<DetectiveViewProps> = ({
           )}
         </div>
 
-        {/* ================= ZONE 2: SCENARIO-GENERATED CCTV VIDEO SURVEILLANCE ================= */}
-        <div className={`lg:col-span-5 flex flex-col rounded-2xl hologram-panel border border-cyan-400/40 p-3 bg-slate-950/85 backdrop-blur-xl space-y-2.5 overflow-hidden ${
-          mobileActiveTab === 'inspection' ? 'flex' : 'hidden lg:flex'
-        }`}>
+        {/* Right Tactical Console: NOVA AI Feed, Selected Clue Dossier & Accusation Button (4 Cols) */}
+        <div className="lg:col-span-4 flex flex-col space-y-3 overflow-hidden">
           
-          {/* Header Bar - Clear Scenario CCTV Tag */}
-          <div className="flex items-center justify-between pb-1.5 border-b border-slate-800/80">
-            <span className="text-xs font-mono font-bold text-cyan-400 flex items-center space-x-1.5">
-              <Eye className="w-4 h-4 text-cyan-400 animate-pulse" />
-              <span>CRIME SCENE SURVEILLANCE FEED</span>
-            </span>
-
-            <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
-              HD REPLAY ACTIVE
-            </span>
-          </div>
-
-          {/* Scenario Generated CCTV Surveillance Video */}
-          <div className="relative flex-1 rounded-xl overflow-hidden border border-cyan-500/30 bg-slate-950 flex flex-col">
-            <ScenarioCCTVPlayer scenario={scenario} selectedClue={selectedClue} />
-          </div>
-
-          {/* NOVA AI Deduction Speech Bubble */}
-          <div className="p-2.5 rounded-xl bg-gradient-to-r from-cyan-950/90 to-slate-950 border border-cyan-500/40 space-y-1">
-            <div className="text-[10px] font-mono text-cyan-400 font-bold flex items-center space-x-1.5">
-              <Sparkles className="w-3 h-3 text-cyan-300 animate-spin" style={{ animationDuration: '6s' }} />
-              <span>NOVA FORENSIC DEDUCTION:</span>
+          {/* NOVA AI Guidance Pod */}
+          <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-cyan-500/30 backdrop-blur-xl shadow-lg">
+            <div className="flex items-center space-x-2 text-cyan-300 font-mono text-xs font-bold mb-1.5">
+              <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" style={{ animationDuration: '6s' }} />
+              <span>NOVA NEURAL ADVISOR [TIER {novaTier}]</span>
             </div>
-            <p className="text-xs font-sans text-white leading-relaxed">
-              "{aiDeduction}"
+            <p className="text-xs font-mono text-slate-200 leading-relaxed">
+              {aiDeduction}
             </p>
           </div>
-        </div>
 
-        {/* ================= ZONE 3: WHO IS THE CULPRIT? ACCUSATION MATRIX (3 COLS) ================= */}
-        <div className={`lg:col-span-3 flex flex-col rounded-2xl hologram-panel border border-cyan-400/40 p-3 bg-slate-950/85 backdrop-blur-xl space-y-3 overflow-hidden ${
-          mobileActiveTab === 'accuse' ? 'flex' : 'hidden lg:flex'
-        }`}>
-          <div className="text-xs font-mono font-bold text-white uppercase tracking-wider pb-1.5 border-b border-slate-800">
-            WHO IS THE CULPRIT?
-          </div>
+          {/* Active Clue Inspector */}
+          <div className="flex-1 p-4 rounded-2xl bg-slate-950/90 border border-slate-800 overflow-y-auto flex flex-col justify-between">
+            {selectedClue ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800 text-xs font-mono">
+                  <span className="text-amber-400 font-bold">{selectedClue.category}</span>
+                  <span className="text-slate-400">{selectedClue.timestamp}</span>
+                </div>
+                <h3 className="text-base font-bold text-white">{selectedClue.title}</h3>
+                <p className="text-xs font-mono text-slate-300 leading-relaxed bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                  {selectedClue.details}
+                </p>
 
-          <p className="text-xs text-slate-300 font-sans leading-relaxed">
-            Review the alibis against the timeline clues. When ready, issue the official arrest warrant:
-          </p>
-
-          {/* Suspect Accusation Cards */}
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-            {suspects.map((s: any) => (
-              <div
-                key={s.id}
-                className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-cyan-400 transition-all space-y-2 shadow-md"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-bold text-white text-xs font-mono">{s.name}</div>
-                    <div className="text-[10px] text-cyan-400 font-mono">{s.role}</div>
-                  </div>
+                <div className="pt-2">
                   <button
-                    onClick={() => handleAccusation(s)}
-                    className="px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black font-display font-bold text-[10px] tracking-wider transition-colors"
+                    onClick={() => handleTogglePinClue(selectedClue.id)}
+                    className={`w-full py-2.5 rounded-xl font-mono text-xs font-bold flex items-center justify-center space-x-2 transition-all ${
+                      pinnedClueIds.includes(selectedClue.id)
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                    }`}
                   >
-                    ARREST
+                    <Pin className="w-3.5 h-3.5 fill-current" />
+                    <span>{pinnedClueIds.includes(selectedClue.id) ? 'PINNED TO CASE-WALL' : 'PIN EVIDENCE'}</span>
                   </button>
                 </div>
-                <div className="text-[10px] text-slate-400 font-sans italic line-clamp-2">
-                  Alibi: "{s.alibi}"
-                </div>
               </div>
-            ))}
+            ) : (
+              <div className="text-center py-10 text-slate-500 font-mono text-xs">
+                Select an evidence card on the corkboard to inspect details.
+              </div>
+            )}
+
+            {/* Level 5 Grand Accusation Trigger */}
+            <div className="pt-3 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  soundFX.playClick();
+                  setActiveTab('suspects');
+                }}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-black text-xs font-mono uppercase tracking-wider shadow-lg active:scale-95 transition-all flex items-center justify-center space-x-2"
+              >
+                <Scale className="w-4 h-4" />
+                <span>PROCEED TO FINAL ACCUSATION</span>
+              </button>
+            </div>
           </div>
 
-          {/* Award Status Badge */}
-          <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[10px] font-mono text-center text-slate-400">
-            CORRECT ARREST AWARDS <span className="text-cyan-300 font-bold">+500 XP</span> & OFFICIAL DOSSIER
-          </div>
         </div>
 
       </div>
+
+      {/* Suspect Interrogation Dialogue Modal */}
+      <SuspectDialogueModal
+        suspect={selectedSuspect}
+        isOpen={isInterrogationOpen}
+        onClose={() => setIsInterrogationOpen(false)}
+        onPinTestimony={handlePinTestimony}
+      />
+
+      {/* Forensic Debrief Modal (Outcome of Accusation) */}
+      {isDebriefing && debriefOutcome && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in select-none font-display">
+          <div className="relative max-w-lg w-full p-6 rounded-2xl bg-slate-950 border-2 border-cyan-400 shadow-2xl text-center">
+            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-mono font-bold mb-3 border bg-slate-900 text-cyan-300 border-cyan-500/40">
+              {debriefOutcome.isCorrect ? '✓ CASE SOLVED' : '⚠ FORENSIC DEBRIEF'}
+            </div>
+
+            <h3 className="text-2xl font-black text-white mb-2">
+              {debriefOutcome.isCorrect ? 'Perpetrator Apprehended' : 'Accusation Contradicted'}
+            </h3>
+
+            <p className="text-xs font-mono text-slate-300 mb-4 leading-relaxed">
+              {debriefOutcome.isCorrect
+                ? `Sensors confirmed the match. ${debriefOutcome.culpritName} was identified via direct physical and digital contradiction: ${debriefOutcome.explanation}`
+                : `The physical timeline cleared your initial target. Official logs confirm the true intruder was ${debriefOutcome.culpritName}: ${debriefOutcome.explanation}`}
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs font-mono text-emerald-400 mb-5">
+              Case file synchronized with Exhibition Souvenir Database.
+            </div>
+
+            <button
+              onClick={() => setIsDebriefing(false)}
+              className="w-full py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs font-mono uppercase tracking-wider"
+            >
+              FINALIZE CASE DOSSIER ➔
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

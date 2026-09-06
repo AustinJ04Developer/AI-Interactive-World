@@ -21,14 +21,22 @@ import {
   HelpCircle,
   Sparkles
 } from 'lucide-react';
-import type { DefenseThreat, PlayerAdaptationStats, SouvenirData } from '../types';
+import type { DefenseThreat, PlayerAdaptationStats, SouvenirData, LevelResult } from '../types';
 import { soundFX } from '../services/audioService';
+import { useLevelTimer, type LevelConfig } from '../hooks/useLevelTimer';
 
 interface AIDefenseViewProps {
   visitorPhotoUrl: string | null;
   visitorName?: string;
   onComplete: (souvenir: SouvenirData) => void;
   onExit: () => void;
+  onHudUpdate?: (hud: {
+    level?: number;
+    timeRemaining?: number;
+    timeBudget?: number;
+    transitionInfo?: any;
+    score?: number;
+  }) => void;
 }
 
 interface FloatingText {
@@ -59,11 +67,20 @@ interface BossEnemy {
   active: boolean;
 }
 
+const DEFENSE_LEVEL_CONFIGS: LevelConfig[] = [
+  { level: 1, label: 'Wave 1: Peripheral Recon Probes', timeBudgetSec: 45, maxScore: 100 },
+  { level: 2, label: 'Wave 2: Distributed Botnet Infiltration', timeBudgetSec: 55, maxScore: 150 },
+  { level: 3, label: 'Wave 3: Quantum Decryption Swarm', timeBudgetSec: 65, maxScore: 200 },
+  { level: 4, label: 'Wave 4: Neural Trojan Incursion', timeBudgetSec: 65, maxScore: 250 },
+  { level: 5, label: 'Wave 5: Hive Queen Zero-Day Synthesis', timeBudgetSec: 70, maxScore: 300 },
+];
+
 export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
   visitorPhotoUrl,
   visitorName = 'Cadet Alex',
   onComplete,
-  onExit
+  onExit,
+  onHudUpdate
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -72,13 +89,15 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
   const [gameState, setGameState] = useState<'briefing' | 'active' | 'complete'>('briefing');
   const [score, setScore] = useState<number>(0);
   const [coreHealth, setCoreHealth] = useState<number>(100);
-  const [wave, setWave] = useState<number>(1);
   const [combo, setCombo] = useState<number>(0);
   const [empCharges, setEmpCharges] = useState<number>(2);
   const [freezeCharges, setFreezeCharges] = useState<number>(2);
   const [shieldCharges, setShieldCharges] = useState<number>(1);
   const [isFrozen, setIsFrozen] = useState<boolean>(false);
   const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 400, y: 300 });
+  const mousePosRef = useRef<{ x: number; y: number }>({ x: 400, y: 300 });
+  const isPointerDownRef = useRef<boolean>(false);
+  const lastShotTimeRef = useRef<number>(0);
 
   const [adaptationStats, setAdaptationStats] = useState<PlayerAdaptationStats>({
     reactionTimeMs: 410,
@@ -89,6 +108,69 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
     riskTolerance: 'Balanced'
   });
   const [aiAdaptiveAlert, setAiAdaptiveAlert] = useState<string>('DEFENSE GRID ACTIVE // TARGET INCOMING MALWARE');
+
+  // Universal 5-Level Timer Scaffolding Integration
+  const handleFinalDefenseComplete = (results: LevelResult[], finalScore: number) => {
+    soundFX.playSuccess();
+    setGameState('complete');
+    const totalScoreVal = finalScore + 400;
+    const allCompletedWithoutTimeout = results.every(r => r.completedBeforeTimeout);
+    const achievements = allCompletedWithoutTimeout
+      ? ['Neural Defender', 'Sub-400ms Reflexes', 'Quantum Core Hero', 'Titan Breaker'] 
+      : ['Brave Stand', 'Swarm Survivor', 'Quantum Resilient'];
+
+    const souvenirData: SouvenirData = {
+      experienceId: 'ai-defense',
+      experienceTitle: 'AI DEFENSE // PLAYER PROFILE',
+      experienceSubtitle: 'MISSION RESULT: QUANTUM CORE SECURED (5 WAVES)',
+      visitorName,
+      visitorPhotoUrl: visitorPhotoUrl || '',
+      score: totalScoreVal,
+      achievements,
+      metrics: [
+        { label: 'REACTION LATENCY', value: `${adaptationStats.reactionTimeMs} MS` },
+        { label: 'TARGETING ACCURACY', value: `${adaptationStats.accuracyPct}%` },
+        { label: 'GLITCHES ELIMINATED', value: `${statsRef.current.hits} ANOMALIES` },
+        { label: 'WAVES CLEARED', value: `${results.filter(r => r.completedBeforeTimeout).length} / 5 WAVES` }
+      ],
+      aiAnalysis: `Dynamic neural adaptation analysis logs a ${adaptationStats.reactionTimeMs}ms average reflex response across 5 escalating threat waves. Behavioral metrics classified combat style as ${adaptationStats.riskTolerance}.`,
+      dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      sessionId: 'DEF-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      badge: allCompletedWithoutTimeout ? 'CYBER-ATHLETE ELITE' : 'TACTICAL DEFENDER',
+      themeColor: '#ff007f',
+      levelResults: results
+    };
+
+    setTimeout(() => {
+      onComplete(souvenirData);
+    }, 1200);
+  };
+
+  const {
+    currentLevel,
+    timeRemainingInLevel,
+    currentConfig,
+    transitionInfo,
+    totalScore,
+    advanceLevel,
+    timeoutLevel,
+    start: startLevelTimer
+  } = useLevelTimer(DEFENSE_LEVEL_CONFIGS, handleFinalDefenseComplete);
+
+  const wave = currentLevel;
+
+  // Sync Level HUD with GlobalHUD
+  useEffect(() => {
+    if (onHudUpdate) {
+      onHudUpdate({
+        level: currentLevel,
+        timeRemaining: timeRemainingInLevel,
+        timeBudget: currentConfig.timeBudgetSec,
+        transitionInfo,
+        score: totalScore + score
+      });
+    }
+  }, [currentLevel, timeRemainingInLevel, currentConfig, transitionInfo, totalScore, score, onHudUpdate]);
 
   // Game loop internal refs
   const threatsRef = useRef<DefenseThreat[]>([]);
@@ -111,10 +193,10 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
 
   const handleStartGame = () => {
     soundFX.playBoot();
+    startLevelTimer();
     setGameState('active');
     setScore(0);
     setCoreHealth(100);
-    setWave(1);
     setCombo(0);
     setEmpCharges(2);
     setFreezeCharges(2);
@@ -270,16 +352,10 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
       ctx.fillText(`${coreHealth}% HP`, coreX, coreY + 12);
       ctx.restore();
 
-      const hits = statsRef.current.hits;
+      const currentWave = currentLevel;
 
-      // Wave calculation: Wave 1 (0-9 hits), Wave 2 (10-19 hits), Wave 3 (20+ hits)
-      const currentWave = hits < 10 ? 1 : hits < 20 ? 2 : 3;
-      if (currentWave !== wave) {
-        setWave(currentWave);
-      }
-
-      // Boss Spawn Trigger on Wave 3 (20 hits)
-      if (hits >= 20 && !bossRef.current.active && bossRef.current.health === 0) {
+      // Boss Spawn Trigger on Wave 5
+      if (currentWave === 5 && !bossRef.current.active && bossRef.current.health === 0) {
         bossRef.current = {
           x: coreX,
           y: Math.max(70, h * 0.18),
@@ -351,7 +427,10 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
           soundFX.playAlert();
           setCoreHealth(prev => {
             const next = Math.max(0, prev - 12);
-            if (next <= 0) handleGameOver();
+            if (next <= 0) {
+              timeoutLevel(Math.round(currentConfig.maxScore * 0.4), 35, 'Emergency Reboot // Non-Fatal Breach');
+              return 45;
+            }
             return next;
           });
           statsRef.current.comboCount = 0;
@@ -447,19 +526,77 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
         ctx.restore();
       }
 
-      // Draw Cursor Crosshair on Canvas
-      ctx.save();
-      ctx.strokeStyle = '#00f2fe';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(mousePos.x, mousePos.y, 16, 0, Math.PI * 2);
-      ctx.stroke();
+      // Find closest threat or boss to cursor for Smart Magnetic Reticle Lock
+      let lockedTarget: { x: number; y: number; radius: number; isBoss: boolean } | null = null;
+      if (bossRef.current.active && Math.hypot(mousePos.x - bossRef.current.x, mousePos.y - bossRef.current.y) < 65) {
+        lockedTarget = { x: bossRef.current.x, y: bossRef.current.y, radius: 45, isBoss: true };
+      } else {
+        let bestDist = 65;
+        threatsRef.current.forEach(t => {
+          const d = Math.hypot(mousePos.x - t.x, mousePos.y - t.y);
+          if (d < bestDist) {
+            bestDist = d;
+            lockedTarget = { x: t.x, y: t.y, radius: t.radius || 18, isBoss: false };
+          }
+        });
+      }
 
-      ctx.beginPath();
-      ctx.moveTo(mousePos.x - 22, mousePos.y); ctx.lineTo(mousePos.x + 22, mousePos.y);
-      ctx.moveTo(mousePos.x, mousePos.y - 22); ctx.lineTo(mousePos.x, mousePos.y + 22);
-      ctx.stroke();
+      // Draw Cursor & Smart Magnetic Targeting Crosshair on Canvas
+      ctx.save();
+      if (lockedTarget) {
+        // High-Tech Animated Magnetic Lock-On Brackets
+        const lx = lockedTarget.x;
+        const ly = lockedTarget.y;
+        const bColor = lockedTarget.isBoss ? '#ff007f' : '#00f2fe';
+        ctx.strokeStyle = bColor;
+        ctx.lineWidth = 2;
+        const bSize = 22;
+
+        // 4 Corner Brackets
+        ctx.beginPath(); ctx.moveTo(lx - bSize, ly - bSize + 8); ctx.lineTo(lx - bSize, ly - bSize); ctx.lineTo(lx - bSize + 8, ly - bSize); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(lx + bSize - 8, ly - bSize); ctx.lineTo(lx + bSize, ly - bSize); ctx.lineTo(lx + bSize, ly - bSize + 8); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(lx - bSize, ly + bSize - 8); ctx.lineTo(lx - bSize, ly + bSize); ctx.lineTo(lx - bSize + 8, ly + bSize); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(lx + bSize - 8, ly + bSize); ctx.lineTo(lx + bSize, ly + bSize); ctx.lineTo(lx + bSize, ly + bSize - 8); ctx.stroke();
+
+        // Pulsing lock ring
+        ctx.beginPath();
+        ctx.arc(lx, ly, 12, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Lock text
+        ctx.fillStyle = bColor;
+        ctx.font = 'bold 9px "Orbitron", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('[ TARGET LOCKED ]', lx, ly - bSize - 4);
+
+        // Faint laser targeting guide beam from core
+        ctx.strokeStyle = 'rgba(0, 242, 254, 0.25)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(coreX, coreY); ctx.lineTo(lx, ly); ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        // Sleek Precision Targeting Reticle
+        ctx.strokeStyle = '#00f2fe';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.arc(mousePos.x, mousePos.y, 14, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(mousePos.x - 20, mousePos.y); ctx.lineTo(mousePos.x - 5, mousePos.y);
+        ctx.moveTo(mousePos.x + 5, mousePos.y); ctx.lineTo(mousePos.x + 20, mousePos.y);
+        ctx.moveTo(mousePos.x, mousePos.y - 20); ctx.lineTo(mousePos.x, mousePos.y - 5);
+        ctx.moveTo(mousePos.x, mousePos.y + 5); ctx.lineTo(mousePos.x, mousePos.y + 20);
+        ctx.stroke();
+
+        // Center dot
+        ctx.fillStyle = '#00f2fe';
+        ctx.beginPath(); ctx.arc(mousePos.x, mousePos.y, 2, 0, Math.PI * 2); ctx.fill();
+      }
       ctx.restore();
+
+      // Rapid Hold-to-Fire Mechanism (Fires smooth laser bursts when pointer is held down)
+      if (isPointerDownRef.current && now - lastShotTimeRef.current >= 120) {
+        lastShotTimeRef.current = now;
+        fireLaser(mousePosRef.current.x, mousePosRef.current.y);
+      }
 
       // Floating Combat Texts
       for (let f = floatingTextsRef.current.length - 1; f >= 0; f--) {
@@ -507,55 +644,88 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
     };
   }, [gameState, coreHealth, wave, isFrozen, mousePos]);
 
-  // Click to Shoot Laser
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Enhanced Pointing and Shooting Engine with Magnetic Lock and Generous Hitbox
+  const fireLaser = (targetX: number, targetY: number) => {
     if (gameState !== 'active') return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
+
+    // Start timer on first shot if not already running!
+    startLevelTimer();
 
     const coreX = canvas.width / 2;
     const coreY = canvas.height / 2;
 
     statsRef.current.totalShots++;
     const now = Date.now();
-    const reactionTime = now - statsRef.current.lastClickTime;
+    const reactionTime = Math.min(750, Math.max(120, now - statsRef.current.lastClickTime));
     statsRef.current.lastClickTime = now;
     statsRef.current.reactionLatencies.push(reactionTime);
 
-    // Laser Beam VFX
+    // Check if target is magnetically locked near the pointer
+    let aimX = targetX;
+    let aimY = targetY;
+    let lockedThreatIndex = -1;
+
+    if (bossRef.current.active && Math.hypot(targetX - bossRef.current.x, targetY - bossRef.current.y) < 65) {
+      aimX = bossRef.current.x;
+      aimY = bossRef.current.y;
+    } else {
+      let closestDist = 65;
+      threatsRef.current.forEach((t, idx) => {
+        const d = Math.hypot(targetX - t.x, targetY - t.y);
+        if (d < closestDist) {
+          closestDist = d;
+          aimX = t.x;
+          aimY = t.y;
+          lockedThreatIndex = idx;
+        }
+      });
+    }
+
+    // High-Intensity Twin Laser Cannons with plasma core
+    const beamColor = combo >= 5 ? '#ff007f' : combo >= 2 ? '#ffaa00' : '#00f2fe';
     laserBeamsRef.current.push({
-      x1: coreX,
+      x1: coreX - 8,
       y1: coreY,
-      x2: clickX,
-      y2: clickY,
+      x2: aimX,
+      y2: aimY,
       alpha: 1,
-      color: combo >= 3 ? '#ffaa00' : '#00f2fe'
+      color: beamColor
+    });
+    laserBeamsRef.current.push({
+      x1: coreX + 8,
+      y1: coreY,
+      x2: aimX,
+      y2: aimY,
+      alpha: 1,
+      color: '#ffffff'
     });
 
     soundFX.playLaser();
+
+    // Muzzle flash particle burst at core
+    spawnExplosion(coreX, coreY, beamColor, 5);
 
     let hitSomething = false;
 
     // Check hit on Boss
     if (bossRef.current.active) {
-      const bdx = clickX - bossRef.current.x;
-      const bdy = clickY - bossRef.current.y;
-      if (Math.sqrt(bdx * bdx + bdy * bdy) < 45) {
+      const bdx = aimX - bossRef.current.x;
+      const bdy = aimY - bossRef.current.y;
+      if (Math.hypot(bdx, bdy) < 55) {
         hitSomething = true;
         bossRef.current.health--;
         soundFX.playWarning();
 
-        spawnExplosion(clickX, clickY, '#ff007f', 15);
+        spawnExplosion(aimX, aimY, '#ff007f', 16);
 
         floatingTextsRef.current.push({
           id: Math.random().toString(),
-          x: clickX,
-          y: clickY - 15,
-          text: `CRITICAL! BOSS HP: ${bossRef.current.health}`,
+          x: aimX,
+          y: aimY - 15,
+          text: `CRITICAL BURST! BOSS HP: ${bossRef.current.health}`,
           color: '#ff007f',
           alpha: 1
         });
@@ -564,21 +734,19 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
           bossRef.current.active = false;
           soundFX.playSuccess();
           setScore(prev => prev + 1500);
-          handleGameWin();
+          advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Titan Glitch Overlord Neutralized');
         }
       }
     }
 
-    // Check hit on Regular Threats
+    // Check hit on Regular Threats (with generous burst radius)
     if (!hitSomething) {
       for (let i = threatsRef.current.length - 1; i >= 0; i--) {
         const t = threatsRef.current[i];
-        const dx = clickX - t.x;
-        const dy = clickY - t.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
+        const dist = Math.hypot(aimX - t.x, aimY - t.y);
+        const hitRadius = (t.radius || 18) + 26; // Generous satisfying burst radius!
 
-        const hitRadius = (t.radius || 16) + 14;
-        if (dist <= hitRadius) {
+        if (dist <= hitRadius || i === lockedThreatIndex) {
           hitSomething = true;
           threatsRef.current.splice(i, 1);
 
@@ -591,7 +759,7 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
           const pointsEarned = 100 * multiplier;
           setScore(prev => prev + pointsEarned);
 
-          soundFX.playClick(400 + newCombo * 60);
+          soundFX.playClick(420 + Math.min(newCombo * 50, 400));
           spawnExplosion(t.x, t.y, t.color || '#00f2fe', 18);
 
           floatingTextsRef.current.push({
@@ -604,6 +772,18 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
           });
 
           updateAIAdaptation();
+
+          // Check wave escalation milestones
+          const totalHits = statsRef.current.hits;
+          if (currentLevel === 1 && totalHits >= 6) {
+            advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Wave 1: Probes Neutralized');
+          } else if (currentLevel === 2 && totalHits >= 13) {
+            advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Wave 2: Botnet Severed');
+          } else if (currentLevel === 3 && totalHits >= 21) {
+            advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Wave 3: Decryption Stopped');
+          } else if (currentLevel === 4 && totalHits >= 30) {
+            advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Wave 4: Trojans Purged');
+          }
           break;
         }
       }
@@ -612,10 +792,6 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
     if (!hitSomething) {
       statsRef.current.comboCount = 0;
       setCombo(0);
-    }
-
-    if (statsRef.current.hits >= 25 && !bossRef.current.active) {
-      handleGameWin();
     }
   };
 
@@ -735,45 +911,16 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
 
   const handleGameOver = () => {
     soundFX.playAlert();
-    finalizeSouvenir(false);
+    timeoutLevel(Math.round(currentConfig.maxScore * 0.4), 40, 'Core Defense Overloaded');
   };
 
   const handleGameWin = () => {
     soundFX.playSuccess();
-    finalizeSouvenir(true);
+    advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Quantum Core Secured');
   };
 
-  const finalizeSouvenir = (victory: boolean) => {
-    setGameState('complete');
-    const finalScore = score + (victory ? 500 : 180);
-    const achievements = victory 
-      ? ['Neural Defender', 'Sub-400ms Reflexes', 'Quantum Core Hero', 'Titan Breaker'] 
-      : ['Brave Stand', 'Swarm Survivor'];
-
-    const souvenirData: SouvenirData = {
-      experienceId: 'ai-defense',
-      experienceTitle: 'AI DEFENSE // PLAYER PROFILE',
-      experienceSubtitle: victory ? 'MISSION RESULT: QUANTUM CORE SECURED' : 'MISSION RESULT: CORE OVERWHELMED',
-      visitorName,
-      visitorPhotoUrl: visitorPhotoUrl || '',
-      score: finalScore,
-      achievements,
-      metrics: [
-        { label: 'REACTION LATENCY', value: `${adaptationStats.reactionTimeMs} MS` },
-        { label: 'TARGETING ACCURACY', value: `${adaptationStats.accuracyPct}%` },
-        { label: 'GLITCHES ELIMINATED', value: `${statsRef.current.hits} ANOMALIES` },
-        { label: 'MAX COMBO STREAK', value: `${combo > 0 ? combo : 5} HITS` }
-      ],
-      aiAnalysis: `Dynamic neural adaptation analysis logs a ${adaptationStats.reactionTimeMs}ms average reflex response. Behavioral metrics classified combat style as ${adaptationStats.riskTolerance}.`,
-      dateStr: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      sessionId: 'DEF-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      badge: victory ? 'CYBER-ATHLETE ELITE' : 'TACTICAL DEFENDER',
-      themeColor: '#ff007f'
-    };
-
-    setTimeout(() => {
-      onComplete(souvenirData);
-    }, 1200);
+  const finalizeSouvenir = () => {
+    advanceLevel(currentConfig.maxScore, adaptationStats.accuracyPct, 'Mission Concluded');
   };
 
   return (
@@ -816,12 +963,29 @@ export const AIDefenseView: React.FC<AIDefenseViewProps> = ({
       >
         <canvas
           ref={canvasRef}
-          onClick={handleCanvasClick}
-          onMouseMove={(e) => {
+          onPointerDown={(e) => {
+            isPointerDownRef.current = true;
             const rect = e.currentTarget.getBoundingClientRect();
-            setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            mousePosRef.current = { x, y };
+            setMousePos({ x, y });
+            fireLaser(x, y);
           }}
-          className="w-full h-full block cursor-crosshair"
+          onPointerMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            mousePosRef.current = { x, y };
+            setMousePos({ x, y });
+          }}
+          onPointerUp={() => {
+            isPointerDownRef.current = false;
+          }}
+          onPointerLeave={() => {
+            isPointerDownRef.current = false;
+          }}
+          className="w-full h-full block cursor-crosshair touch-none select-none"
         />
 
         {/* BRIEFING OVERLAY IF BRIEFING STATE */}

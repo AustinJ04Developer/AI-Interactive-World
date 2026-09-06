@@ -21,11 +21,13 @@ import { DemoModal } from './views/DemoModal';
 import { HelpModal } from './views/HelpModal';
 import { MobileResultView } from './views/MobileResultView';
 import { OperatorDashboard } from './views/OperatorDashboard';
+import { AdminDashboard } from './views/AdminDashboard';
 
 export const App: React.FC = () => {
-  // Check URL path for direct mobile result (/results/:token) or operator (/operator)
+  // Check URL path for direct mobile result (/results/:token), operator (/operator), or admin leaderboard (/admin)
   const pathname = window.location.pathname;
   const isOperatorRoute = pathname === '/operator';
+  const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
   const isResultRoute = pathname.startsWith('/results/');
   const resultToken = isResultRoute ? pathname.split('/results/')[1] : null;
 
@@ -35,6 +37,13 @@ export const App: React.FC = () => {
   const [visitorName, setVisitorName] = useState<string>('Cadet Alex');
   const [currentSouvenir, setCurrentSouvenir] = useState<SouvenirData | null>(null);
   const [isOperatorView, setIsOperatorView] = useState<boolean>(isOperatorRoute);
+  const [gameHudState, setGameHudState] = useState<{
+    level?: number;
+    timeRemaining?: number;
+    timeBudget?: number;
+    transitionInfo?: any;
+    score?: number;
+  } | null>(null);
 
   const [hardware, setHardware] = useState<HardwareStatus>({
     camera: 'prompt',
@@ -206,8 +215,19 @@ export const App: React.FC = () => {
     );
   }
 
+  // If admin leaderboard route is opened (/admin)
+  if (isAdminRoute) {
+    return (
+      <AdminDashboard
+        onReturnToExhibit={() => {
+          window.location.href = '/';
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#020408] text-slate-100 font-sans">
+    <div className={`relative w-screen ${currentView === 'results' ? 'min-h-screen overflow-y-auto' : 'h-screen overflow-hidden'} bg-[#020408] text-slate-100 font-sans`}>
       {/* Global Futuristic HUD */}
       <GlobalHUD
         currentView={currentView}
@@ -219,6 +239,11 @@ export const App: React.FC = () => {
         onOpenDemo={() => setIsDemoModalOpen(true)}
         onOpenHelp={() => setIsHelpModalOpen(true)}
         expoSecondsLeft={hardware.expoMode ? expoSecondsLeft : undefined}
+        level={gameHudState?.level}
+        timeRemainingInLevel={gameHudState?.timeRemaining}
+        timeBudgetInLevel={gameHudState?.timeBudget}
+        transitionInfo={gameHudState?.transitionInfo}
+        score={gameHudState?.score}
       />
 
       {/* Primary View Routing */}
@@ -248,6 +273,7 @@ export const App: React.FC = () => {
           visitorName={visitorName}
           onComplete={handleExperienceComplete}
           onExit={() => setCurrentView('portal')}
+          onHudUpdate={setGameHudState}
         />
       )}
 
@@ -257,6 +283,7 @@ export const App: React.FC = () => {
           visitorName={visitorName}
           onComplete={handleExperienceComplete}
           onExit={() => setCurrentView('portal')}
+          onHudUpdate={setGameHudState}
         />
       )}
 
@@ -266,6 +293,7 @@ export const App: React.FC = () => {
           visitorName={visitorName}
           onComplete={handleExperienceComplete}
           onExit={() => setCurrentView('portal')}
+          onHudUpdate={setGameHudState}
         />
       )}
 
@@ -275,6 +303,7 @@ export const App: React.FC = () => {
           visitorName={visitorName}
           onComplete={handleExperienceComplete}
           onExit={() => setCurrentView('portal')}
+          onHudUpdate={setGameHudState}
         />
       )}
 

@@ -262,7 +262,7 @@ export const PortalSelection: React.FC<PortalSelectionProps> = ({ onSelectExperi
 
       {/* Footer Helper */}
       <div className="relative z-20 text-center font-mono text-[11px] text-slate-400">
-        MISSION BRIEFING & INTERACTIVE DEMO INCLUDED • DURATION: 2–4 MINUTES • OFFICIAL SOUVENIR POSTER 📸
+        MISSION BRIEFING & INTERACTIVE DEMO INCLUDED • DURATION: 5 MINUTES (5-PHASE STANDARDIZED) • OFFICIAL SOUVENIR POSTER 📸
       </div>
 
       {/* Interactive Pre-Game Demo & Instruction Training Modal */}

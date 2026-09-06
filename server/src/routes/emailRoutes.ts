@@ -10,9 +10,16 @@ emailRouter.post('/send-experience', async (req: Request, res: Response) => {
       resultId,
       recipientEmail,
       experienceTitle,
+      visitorName,
       score,
       xpEarned,
       achievements,
+      badges,
+      cardFrontUrl,
+      cardBackUrl,
+      badgePrintUrl,
+      posterUrl,
+      snapshotUrl,
       token
     } = req.body;
 
@@ -30,9 +37,16 @@ emailRouter.post('/send-experience', async (req: Request, res: Response) => {
       resultId,
       recipientEmail,
       experienceTitle: experienceTitle || 'AI Interactive World Experience',
+      visitorName: visitorName || 'Cadet Alex',
       score: score || 500,
       xpEarned: xpEarned || 500,
       achievements: achievements || ['Mission Complete'],
+      badges: badges || [],
+      cardFrontUrl,
+      cardBackUrl,
+      badgePrintUrl,
+      posterUrl,
+      snapshotUrl,
       resultWebUrl
     });
 

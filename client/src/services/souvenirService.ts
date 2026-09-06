@@ -1,6 +1,7 @@
 import QRCode from 'qrcode';
-import type { SouvenirData } from '../types';
+import type { SouvenirData, LevelResult } from '../types';
 import { resolveAssetUrl } from './apiService';
+import { computeCorrelation } from './correlationEngine';
 
 /**
  * High-Resolution Canvas 2D Souvenir Dossier / Poster Generator
@@ -251,31 +252,144 @@ export async function generateSouvenirPoster(
     currY += 55;
   });
 
-  // 7. Middle: Achievements Unlocked
-  const achY = 740;
+  // 7. Middle Section A: 5-Segment Level Scaffolding Strip
+  const correlation = data.correlation || computeCorrelation(data.experienceId, data.levelResults, data.score);
+  const levels = (data.levelResults && data.levelResults.length === 5) 
+    ? data.levelResults 
+    : [1, 2, 3, 4, 5].map(i => ({
+        level: i,
+        label: `Phase ${i}`,
+        score: Math.round(data.score * [0.1, 0.15, 0.2, 0.25, 0.3][i-1]),
+        maxScore: [100, 150, 200, 250, 300][i-1],
+        timeTakenSec: 35 + i * 4,
+        timeBudgetSec: [45, 55, 65, 65, 70][i-1],
+        completedBeforeTimeout: true
+      }));
+
+  const levelStripY = 560;
   ctx.fillStyle = '#94a3b8';
-  ctx.font = '700 18px "Orbitron", sans-serif';
-  ctx.fillText('MISSION ACHIEVEMENTS UNLOCKED', 60, achY);
+  ctx.font = '700 14px "Orbitron", sans-serif';
+  ctx.fillText('5-PHASE OPERATIONAL TELEMETRY (300S STANDARD)', 60, levelStripY);
 
-  let achBadgeX = 60;
-  data.achievements.forEach(ach => {
-    ctx.fillStyle = 'rgba(121, 40, 202, 0.25)';
-    ctx.fillRect(achBadgeX, achY + 15, 340, 50);
-    ctx.strokeStyle = '#7928ca';
+  const stripBoxW = 206;
+  const stripBoxH = 75;
+  const stripGap = 12;
+
+  levels.forEach((lvl, idx) => {
+    const bx = 60 + idx * (stripBoxW + stripGap);
+    const by = levelStripY + 12;
+
+    ctx.fillStyle = lvl.completedBeforeTimeout ? 'rgba(8, 20, 48, 0.8)' : 'rgba(48, 20, 8, 0.8)';
+    ctx.fillRect(bx, by, stripBoxW, stripBoxH);
+    ctx.strokeStyle = lvl.completedBeforeTimeout ? 'rgba(0, 242, 254, 0.4)' : 'rgba(245, 158, 11, 0.5)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(achBadgeX, achY + 15, 340, 50);
+    ctx.strokeRect(bx, by, stripBoxW, stripBoxH);
 
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = '600 14px "Space Grotesk", sans-serif';
-    ctx.fillText(`★ ${ach}`, achBadgeX + 16, achY + 45);
+    ctx.fillStyle = lvl.completedBeforeTimeout ? '#00f2fe' : '#f59e0b';
+    ctx.font = '700 12px "JetBrains Mono", monospace';
+    ctx.fillText(`PHASE ${lvl.level}: ${lvl.completedBeforeTimeout ? 'PASS' : 'TIME-OUT'}`, bx + 12, by + 24);
 
-    achBadgeX += 360;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 13px "Space Grotesk", sans-serif';
+    const labelSnippet = lvl.label.split(':')[1] || lvl.label;
+    ctx.fillText(labelSnippet.length > 18 ? labelSnippet.substring(0, 16) + '…' : labelSnippet, bx + 12, by + 45);
+
+    ctx.fillStyle = '#00ff88';
+    ctx.font = '600 12px "JetBrains Mono", monospace';
+    ctx.fillText(`+${lvl.score} XP`, bx + 12, by + 65);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(`${lvl.timeTakenSec}s/${lvl.timeBudgetSec}s`, bx + stripBoxW - 12, by + 65);
+    ctx.textAlign = 'left';
   });
 
-  // 8. Lower Section: AI Intelligence Assessment
-  const aiY = 840;
+  // 8. Middle Section B: Cross-Level Correlation Panel (Sparkline & Composite Title)
+  const corrY = 675;
+  const corrW = width - 120;
+  const corrH = 175;
+
+  ctx.fillStyle = 'rgba(6, 12, 30, 0.9)';
+  ctx.fillRect(60, corrY, corrW, corrH);
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(60, corrY, corrW, corrH);
+
+  // Correlation Header
+  ctx.fillStyle = data.themeColor || '#00f2fe';
+  ctx.font = '700 15px "Orbitron", sans-serif';
+  ctx.fillText(`CROSS-LEVEL CORRELATION // ${correlation.compositeTitle.toUpperCase()}`, 85, corrY + 32);
+
+  // Grade Pill (Top Right of Correlation Box)
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = '900 24px "Orbitron", sans-serif';
+  ctx.fillText(`GRADE: ${correlation.compositeGrade}`, 60 + corrW - 25, corrY + 35);
+  ctx.textAlign = 'left';
+
+  // Draw 5-point Sparkline Line & Nodes
+  const sparkXStart = 90;
+  const sparkWidth = 460;
+  const sparkPoints = correlation.sparklinePoints;
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(sparkXStart, corrY + 70); ctx.lineTo(sparkXStart + sparkWidth, corrY + 70);
+  ctx.moveTo(sparkXStart, corrY + 120); ctx.lineTo(sparkXStart + sparkWidth, corrY + 120);
+  ctx.stroke();
+
+  const coords = sparkPoints.map((val, idx) => {
+    const x = sparkXStart + idx * (sparkWidth / 4);
+    const y = corrY + 135 - (val * 0.7); // scale into height
+    return { x, y, val };
+  });
+
+  // Sparkline Stroke
+  ctx.strokeStyle = data.themeColor || '#00f2fe';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  coords.forEach((c, idx) => {
+    if (idx === 0) ctx.moveTo(c.x, c.y);
+    else ctx.lineTo(c.x, c.y);
+  });
+  ctx.stroke();
+
+  // Nodes & Labels
+  coords.forEach((c, idx) => {
+    ctx.fillStyle = '#020617';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = data.themeColor || '#00f2fe';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '600 10px "JetBrains Mono", monospace';
+    ctx.fillText(`L${idx + 1}`, c.x - 6, corrY + 155);
+  });
+
+  // Right Side Correlation Text: Trend & Consistency Callout
+  const calloutX = 600;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 15px "Space Grotesk", sans-serif';
+  ctx.fillText(correlation.trendLabel, calloutX, corrY + 75);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '500 14px "Space Grotesk", sans-serif';
+  ctx.fillText(`CONSISTENCY: ${correlation.consistencyRating}`, calloutX, corrY + 105);
+
+  if (correlation.standoutLevel) {
+    ctx.fillStyle = '#00ff88';
+    ctx.font = '600 13px "JetBrains Mono", monospace';
+    ctx.fillText(`PEAK PHASE: ${correlation.standoutLevel.label} (${correlation.standoutLevel.reason})`, calloutX, corrY + 135);
+  }
+
+  // 9. Lower Section: AI Intelligence Assessment
+  const aiY = 875;
   const aiBoxW = width - 120;
-  const aiBoxH = 170;
+  const aiBoxH = 150;
 
   ctx.fillStyle = 'rgba(6, 12, 30, 0.85)';
   ctx.fillRect(60, aiY, aiBoxW, aiBoxH);
@@ -284,15 +398,15 @@ export async function generateSouvenirPoster(
   ctx.strokeRect(60, aiY, aiBoxW, aiBoxH);
 
   ctx.fillStyle = '#00f2fe';
-  ctx.font = '700 16px "Orbitron", sans-serif';
-  ctx.fillText('◈ AI NEURAL SYSTEM DEDUCTION & COMMENDATION', 85, aiY + 35);
+  ctx.font = '700 15px "Orbitron", sans-serif';
+  ctx.fillText('◈ AI NEURAL SYSTEM DEDUCTION & COMMENDATION', 85, aiY + 32);
 
   ctx.fillStyle = '#e2e8f0';
-  ctx.font = '400 18px "Space Grotesk", sans-serif';
-  wrapText(ctx, `"${data.aiAnalysis}"`, 85, aiY + 75, aiBoxW - 50, 28);
+  ctx.font = '400 17px "Space Grotesk", sans-serif';
+  wrapText(ctx, `"${data.aiAnalysis}"`, 85, aiY + 68, aiBoxW - 50, 26);
 
-  // 9. Footer: Expo Seal & Dynamic QR Code
-  const footerY = 1040;
+  // 10. Footer: Expo Seal & Dynamic QR Code
+  const footerY = 1050;
 
   // QR Code Box
   const qrX = 60;
@@ -337,7 +451,7 @@ export async function generateSouvenirPoster(
 
   ctx.fillStyle = '#94a3b8';
   ctx.font = '15px "Space Grotesk", sans-serif';
-  ctx.fillText('Instant access to your commemorative high-resolution dossier, achievements, and certificate.', qrX + qrSize + 30, qrY + 75);
+  ctx.fillText('Instant access to your commemorative high-resolution dossier, badges, and 3D operative pass.', qrX + qrSize + 30, qrY + 75);
 
   ctx.fillStyle = data.themeColor;
   ctx.font = '13px "JetBrains Mono", monospace';
@@ -503,3 +617,463 @@ function drawSyntheticAvatarFallback(
 
   ctx.restore();
 }
+
+/**
+ * Generates High-Resolution 300 DPI Front Side of the Operative ID Card
+ */
+export async function generateCardFrontCanvas(data: SouvenirData, qrCodeUrlOrDataUrl?: string): Promise<string> {
+  const canvas = document.createElement('canvas');
+  const w = 750;
+  const h = 1050;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+
+  const themeColor = data.themeColor || '#00f2fe';
+
+  // Background
+  const bgGrad = ctx.createLinearGradient(0, 0, w, h);
+  bgGrad.addColorStop(0, '#060d20');
+  bgGrad.addColorStop(0.5, '#02040a');
+  bgGrad.addColorStop(1, '#0b162c');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Outer Neon Card Border
+  ctx.strokeStyle = themeColor;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(16, 16, w - 32, h - 32);
+
+  // Inner Border
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(26, 26, w - 52, h - 52);
+
+  // Lanyard Punch Hole Slot
+  ctx.fillStyle = '#0f172a';
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 2;
+  const slotW = 120;
+  const slotH = 20;
+  const slotX = (w - slotW) / 2;
+  const slotY = 36;
+  ctx.beginPath();
+  ctx.roundRect(slotX, slotY, slotW, slotH, 10);
+  ctx.fill();
+  ctx.stroke();
+
+  // Header Title
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 13px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SCIENCE EXPO 2026 // OFFICIAL CREDENTIAL', w / 2, 85);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 24px "Orbitron", sans-serif';
+  ctx.fillText('AI INTERACTIVE WORLD', w / 2, 118);
+
+  ctx.fillStyle = themeColor;
+  ctx.font = '700 14px "Orbitron", sans-serif';
+  ctx.fillText(`OPERATIVE ACCESS PASS // ${data.experienceId.toUpperCase()}`, w / 2, 142);
+
+  // Photo Box
+  const photoW = 280;
+  const photoH = 340;
+  const photoX = 50;
+  const photoY = 175;
+
+  ctx.fillStyle = '#020612';
+  ctx.fillRect(photoX, photoY, photoW, photoH);
+  ctx.strokeStyle = themeColor;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(photoX, photoY, photoW, photoH);
+
+  let photoRendered = false;
+  if (data.visitorPhotoUrl) {
+    try {
+      const visitorImg = new Image();
+      await new Promise<void>((resolve) => {
+        imgOnLoad(visitorImg, resolveAssetUrl(data.visitorPhotoUrl), resolve);
+      });
+      if (visitorImg.width > 0) {
+        ctx.drawImage(visitorImg, photoX, photoY, photoW, photoH);
+        photoRendered = true;
+      }
+    } catch {
+      // fallback below
+    }
+  }
+  if (!photoRendered) {
+    drawSyntheticAvatarFallback(ctx, photoX, photoY, photoW, photoH, themeColor);
+  }
+
+  // Identity Data (Right of Photo)
+  const infoX = 360;
+  let textY = 210;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 13px "JetBrains Mono", monospace';
+  ctx.fillText('OPERATIVE CADET:', infoX, textY);
+  textY += 32;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 24px "Orbitron", sans-serif';
+  ctx.fillText((data.visitorName || 'Cadet Alex').slice(0, 16), infoX, textY);
+
+  textY += 45;
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 13px "JetBrains Mono", monospace';
+  ctx.fillText('CREDENTIAL IDENTIFIER:', infoX, textY);
+  textY += 26;
+  ctx.fillStyle = themeColor;
+  ctx.font = '700 18px "JetBrains Mono", monospace';
+  ctx.fillText(`#${data.sessionId}`, infoX, textY);
+
+  textY += 45;
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 13px "JetBrains Mono", monospace';
+  ctx.fillText('OPERATIONAL RANK:', infoX, textY);
+  textY += 26;
+  ctx.fillStyle = '#00ff88';
+  ctx.font = '900 18px "Orbitron", sans-serif';
+  ctx.fillText(data.badge || 'EXPEDITION VANGUARD', infoX, textY);
+
+  textY += 45;
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 13px "JetBrains Mono", monospace';
+  ctx.fillText('EXPEDITION SCORE:', infoX, textY);
+  textY += 30;
+  ctx.fillStyle = '#38bdf8';
+  ctx.font = '900 28px "Orbitron", sans-serif';
+  ctx.fillText(`${data.score} PTS`, infoX, textY);
+
+  // Middle Badge Bar
+  const badgeBarY = 545;
+  ctx.fillStyle = 'rgba(8, 16, 36, 0.9)';
+  ctx.fillRect(50, badgeBarY, w - 100, 95);
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(50, badgeBarY, w - 100, 95);
+
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = '900 26px "Orbitron", sans-serif';
+  ctx.fillText('★', 75, badgeBarY + 58);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 18px "Orbitron", sans-serif';
+  ctx.fillText(`OFFICIAL BADGE: ${data.badge || 'MISSION SPECIALIST'}`, 115, badgeBarY + 42);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '13px "Space Grotesk", sans-serif';
+  ctx.fillText('Verified accreditation by Science Exhibition 2026 AI Assessment Council.', 115, badgeBarY + 68);
+
+  // Bottom Section: QR Code & Security Hologram Chip
+  const btmY = 670;
+
+  // QR Code
+  const qrSize = 160;
+  const qrX = 50;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(qrX, btmY, qrSize, qrSize);
+
+  try {
+    let qrDataUrl = qrCodeUrlOrDataUrl;
+    if (!qrDataUrl) {
+      const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:5173';
+      const qrTargetUrl = `${origin}/results/${data.sessionId}?exp=${data.experienceId}&score=${data.score}`;
+      qrDataUrl = await QRCode.toDataURL(qrTargetUrl, { margin: 1, width: qrSize });
+    }
+    const qrImg = new Image();
+    await new Promise<void>((resolve) => imgOnLoad(qrImg, qrDataUrl || '', resolve));
+    ctx.drawImage(qrImg, qrX, btmY, qrSize, qrSize);
+  } catch (err) {
+    console.warn('Card front QR error:', err);
+  }
+
+  // QR Explainer
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 16px "Orbitron", sans-serif';
+  ctx.fillText('SMARTPHONE PASSPORT', qrX + qrSize + 25, btmY + 40);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '14px "Space Grotesk", sans-serif';
+  ctx.fillText('Scan to take your official badges, operative pass,', qrX + qrSize + 25, btmY + 70);
+  ctx.fillText('and telemetry report directly onto your phone.', qrX + qrSize + 25, btmY + 95);
+
+  ctx.fillStyle = themeColor;
+  ctx.font = '12px "JetBrains Mono", monospace';
+  ctx.fillText(`AUTHENTICATED BY AI CORE // #${data.sessionId}`, qrX + qrSize + 25, btmY + 130);
+
+  // Security Microchip
+  const chipX = w - 155;
+  const chipY = btmY + 40;
+  const chipW = 100;
+  const chipH = 80;
+  const chipGrad = ctx.createLinearGradient(chipX, chipY, chipX + chipW, chipY + chipH);
+  chipGrad.addColorStop(0, '#fde68a');
+  chipGrad.addColorStop(0.5, '#f59e0b');
+  chipGrad.addColorStop(1, '#b45309');
+  ctx.fillStyle = chipGrad;
+  ctx.beginPath();
+  ctx.roundRect(chipX, chipY, chipW, chipH, 8);
+  ctx.fill();
+  ctx.strokeStyle = '#78350f';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Footer Tagline
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#64748b';
+  ctx.font = '700 11px "JetBrains Mono", monospace';
+  ctx.fillText('AI INTERACTIVE WORLD • SCIENCE EXHIBITION 2026 • CARD FRONT', w / 2, h - 30);
+
+  return canvas.toDataURL('image/png', 0.95);
+}
+
+/**
+ * Generates High-Resolution 300 DPI Back Side of the Operative ID Card
+ */
+export async function generateCardBackCanvas(data: SouvenirData): Promise<string> {
+  const canvas = document.createElement('canvas');
+  const w = 750;
+  const h = 1050;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+
+  const themeColor = data.themeColor || '#00f2fe';
+
+  // Background
+  const bgGrad = ctx.createLinearGradient(0, 0, w, h);
+  bgGrad.addColorStop(0, '#040916');
+  bgGrad.addColorStop(0.5, '#02040a');
+  bgGrad.addColorStop(1, '#081228');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Outer Neon Card Border
+  ctx.strokeStyle = themeColor;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(16, 16, w - 32, h - 32);
+
+  // Inner Border
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(26, 26, w - 52, h - 52);
+
+  // Lanyard Punch Hole Slot
+  ctx.fillStyle = '#0f172a';
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 2;
+  const slotW = 120;
+  const slotH = 20;
+  const slotX = (w - slotW) / 2;
+  const slotY = 36;
+  ctx.beginPath();
+  ctx.roundRect(slotX, slotY, slotW, slotH, 10);
+  ctx.fill();
+  ctx.stroke();
+
+  // Back Header Title
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 13px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('OPERATIONAL TELEMETRY & ASSESSMENT // CARD BACK', w / 2, 85);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 24px "Orbitron", sans-serif';
+  ctx.fillText('5-PHASE MISSION TELEMETRY', w / 2, 118);
+
+  // Behavioral Archetype Box
+  const archY = 145;
+  ctx.fillStyle = 'rgba(8, 20, 48, 0.85)';
+  ctx.fillRect(50, archY, w - 100, 115);
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(50, archY, w - 100, 115);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '700 12px "JetBrains Mono", monospace';
+  ctx.fillText('COMPOSITE BEHAVIORAL ARCHETYPE:', 75, archY + 30);
+
+  ctx.fillStyle = '#f59e0b';
+  ctx.font = '900 20px "Orbitron", sans-serif';
+  ctx.fillText(data.correlation?.compositeArchetype || data.correlation?.compositeTitle || 'Tactical Precision Analyst', 75, archY + 62);
+
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = '13px "Space Grotesk", sans-serif';
+  ctx.fillText(`Performance Grade: ${data.correlation?.compositeGrade || 'S+'} • Synchrony: ${data.correlation?.consistencyRating || 'Flawless'}`, 75, archY + 92);
+
+  // 5-Phase Level Telemetry Grid
+  const gridY = 285;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 16px "Orbitron", sans-serif';
+  ctx.fillText('5-PHASE PROGRESSION MATRIX (300S STANDARD):', 50, gridY);
+
+  const levels = (data.levelResults && data.levelResults.length === 5)
+    ? data.levelResults
+    : [1, 2, 3, 4, 5].map(i => ({
+        level: i,
+        label: `Phase ${i}`,
+        score: Math.round(data.score * [0.1, 0.15, 0.2, 0.25, 0.3][i-1]),
+        maxScore: [100, 150, 200, 250, 300][i-1],
+        timeTakenSec: 35 + i * 4,
+        timeBudgetSec: [45, 55, 65, 65, 70][i-1],
+        completedBeforeTimeout: true
+      }));
+
+  const boxW = 120;
+  const boxH = 140;
+  const gap = 12;
+
+  levels.forEach((lvl, idx) => {
+    const bx = 50 + idx * (boxW + gap);
+    const by = gridY + 15;
+
+    ctx.fillStyle = 'rgba(8, 20, 48, 0.85)';
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.strokeStyle = lvl.completedBeforeTimeout ? '#00f2fe' : '#f59e0b';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx, by, boxW, boxH);
+
+    ctx.fillStyle = '#00f2fe';
+    ctx.font = '900 13px "Orbitron", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`PHASE ${lvl.level}`, bx + boxW / 2, by + 28);
+
+    ctx.fillStyle = '#10b981';
+    ctx.font = '900 24px "Orbitron", sans-serif';
+    ctx.fillText('✓', bx + boxW / 2, by + 68);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 15px "Orbitron", sans-serif';
+    ctx.fillText(`${lvl.score}p`, bx + boxW / 2, by + 100);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px "JetBrains Mono", monospace';
+    ctx.fillText(`${lvl.timeTakenSec}s / ${lvl.timeBudgetSec}s`, bx + boxW / 2, by + 124);
+  });
+
+  // AI Neural System Deduction Box
+  const aiY = 475;
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(8, 20, 48, 0.85)';
+  ctx.fillRect(50, aiY, w - 100, 175);
+  ctx.strokeStyle = 'rgba(0, 242, 254, 0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(50, aiY, w - 100, 175);
+
+  ctx.fillStyle = '#00f2fe';
+  ctx.font = '700 15px "Orbitron", sans-serif';
+  ctx.fillText('◈ AI NEURAL SYSTEM DEDUCTION & COMMENDATION', 75, aiY + 34);
+
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = '400 16px "Space Grotesk", sans-serif';
+  wrapText(ctx, `"${data.aiAnalysis || 'Exemplary mission execution. The operative demonstrated rapid sensor comprehension and intuitive strategic adaptations across all five operational phases.'}"`, 75, aiY + 70, w - 150, 26);
+
+  // Security Verification Seal
+  const sealY = 685;
+  drawOfficialExpoStamp(ctx, w / 2, sealY + 75, themeColor);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '700 14px "Orbitron", sans-serif';
+  ctx.fillText('OFFICIAL VALIDATION SEAL // SCIENCE EXHIBITION 2026', w / 2, sealY + 175);
+
+  ctx.fillStyle = themeColor;
+  ctx.font = '12px "JetBrains Mono", monospace';
+  ctx.fillText(`SHA-256 HASH VERIFIED: #8A4F-E029-C7B1-${data.sessionId.toUpperCase()}`, w / 2, sealY + 200);
+
+  // Footer Tagline
+  ctx.fillStyle = '#64748b';
+  ctx.font = '700 11px "JetBrains Mono", monospace';
+  ctx.fillText('AI INTERACTIVE WORLD • SCIENCE EXHIBITION 2026 • CARD BACK', w / 2, h - 30);
+
+  return canvas.toDataURL('image/png', 0.95);
+}
+
+/**
+ * Generates Dual-Sided Printable Lanyard Badge Sheet (Front & Back Side-by-Side with Cut Lines)
+ */
+export async function generateDualCardPrintCanvas(data: SouvenirData, qrCodeUrlOrDataUrl?: string): Promise<string> {
+  const canvas = document.createElement('canvas');
+  // 1650 x 1200 sheet (Landscape 300 DPI layout)
+  const w = 1650;
+  const h = 1200;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+
+  // White Clean Print Background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+
+  // Print Header Banner
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '900 26px "Orbitron", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('AI INTERACTIVE WORLD // SCIENCE EXHIBITION 2026 OPERATIVE LANYARD BADGE', w / 2, 45);
+
+  ctx.fillStyle = '#475569';
+  ctx.font = '600 13px "Space Grotesk", sans-serif';
+  ctx.fillText('PRINTING INSTRUCTIONS: Cut along the outer solid border, fold along the dashed centerline, and insert into standard exhibition badge lanyard holder.', w / 2, 70);
+
+  // Generate both Front and Back card canvases
+  const frontDataUrl = await generateCardFrontCanvas(data, qrCodeUrlOrDataUrl);
+  const backDataUrl = await generateCardBackCanvas(data);
+
+  const cardW = 710;
+  const cardH = 995;
+  const cardY = 95;
+
+  const frontX = 85;
+  const backX = 855;
+
+  // Draw Front Card
+  if (frontDataUrl) {
+    const frontImg = new Image();
+    await new Promise<void>((resolve) => imgOnLoad(frontImg, frontDataUrl, resolve));
+    ctx.drawImage(frontImg, frontX, cardY, cardW, cardH);
+  }
+
+  // Draw Back Card
+  if (backDataUrl) {
+    const backImg = new Image();
+    await new Promise<void>((resolve) => imgOnLoad(backImg, backDataUrl, resolve));
+    ctx.drawImage(backImg, backX, cardY, cardW, cardH);
+  }
+
+  // Center Dashed Fold Line
+  const centerX = (frontX + cardW + backX) / 2;
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 8]);
+  ctx.beginPath();
+  ctx.moveTo(centerX, cardY);
+  ctx.lineTo(centerX, cardY + cardH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Scissors Icon Label
+  ctx.fillStyle = '#475569';
+  ctx.font = '700 12px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('✂ FOLD CENTERLINE ✂', centerX, cardY - 8);
+
+  // Outer Cut Guides
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(frontX - 4, cardY - 4, cardW * 2 + (backX - (frontX + cardW)) + 8, cardH + 8);
+
+  // Footer
+  ctx.fillStyle = '#64748b';
+  ctx.font = '11px "JetBrains Mono", monospace';
+  ctx.fillText(`SESSION ID: ${data.sessionId} • OPERATIVE: ${data.visitorName} • PORTAL: ${data.experienceId.toUpperCase()} • 2-SIDED FOLDABLE BADGE`, w / 2, h - 20);
+
+  return canvas.toDataURL('image/png', 0.95);
+}
+

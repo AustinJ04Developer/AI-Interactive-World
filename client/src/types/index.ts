@@ -34,6 +34,15 @@ export interface VisitorSession {
 }
 
 /* --- Detective Experience Types --- */
+export interface DialogueNode {
+  id: string;
+  prompt: string;
+  response: string;
+  stressLevel: number; // 0 - 100
+  revealsClueId?: string;
+  isContradiction?: boolean;
+}
+
 export interface Suspect {
   id: string;
   name: string;
@@ -44,6 +53,8 @@ export interface Suspect {
   avatar: string;
   contradiction: string;
   isCulprit: boolean;
+  dialogueTree?: DialogueNode[];
+  boardPosition?: { x: number; y: number };
 }
 
 export interface ClueEvidence {
@@ -55,6 +66,9 @@ export interface ClueEvidence {
   details: string;
   unlocked: boolean;
   conflictClueId?: string;
+  level?: number; // 1 to 5
+  boardPosition?: { x: number; y: number };
+  isPinned?: boolean;
 }
 
 /* --- Smart City 2050 Types --- */
@@ -122,6 +136,35 @@ export interface StoryNode {
   endingBadge?: string;
 }
 
+/* --- Level & Cross-Level Correlation Types --- */
+export interface LevelResult {
+  level: number; // 1-5
+  label: string; // e.g. "Evidence Sweep", "Transit Sector", "Wave 3: Decryption"
+  score: number;
+  maxScore: number;
+  timeTakenSec: number;
+  timeBudgetSec: number;
+  completedBeforeTimeout: boolean;
+  accuracy?: number;
+  keyChoice?: string;
+}
+
+export interface CorrelationAnalysis {
+  trend: 'improving' | 'steady' | 'declining' | 'erratic';
+  trendLabel: string;
+  consistencyRating: string;
+  standoutLevel: { level: number; label: string; reason: string } | null;
+  compositeTitle: string;
+  compositeArchetype?: string;
+  compositeGrade: 'S+' | 'S' | 'A' | 'B' | 'C';
+  sparklinePoints: number[];
+  portalSpecificGraphic?: {
+    type: 'evidence-trail' | 'branch-triangle' | 'defense-telemetry' | 'city-efficiency';
+    summary: string;
+    details: any;
+  };
+}
+
 /* --- Souvenir Snapshot --- */
 export interface SouvenirData {
   visitorName?: string;
@@ -137,4 +180,6 @@ export interface SouvenirData {
   sessionId: string;
   badge: string;
   themeColor: string;
+  levelResults?: LevelResult[];
+  correlation?: CorrelationAnalysis;
 }

@@ -110,9 +110,15 @@ export class APIService {
     resultId: string;
     recipientEmail: string;
     experienceTitle: string;
+    visitorName?: string;
     score: number;
     xpEarned: number;
     achievements: string[];
+    badges?: { name: string; description?: string; tier?: string; icon?: string }[];
+    cardFrontUrl?: string;
+    cardBackUrl?: string;
+    badgePrintUrl?: string;
+    posterUrl?: string;
     token?: string;
   }): Promise<{ success: boolean; message: string }> {
     try {
@@ -179,6 +185,74 @@ export class APIService {
       // ignore
     }
     return null;
+  }
+
+  /**
+   * Admin Authentication
+   */
+  public async verifyAdminPin(pin: string) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin })
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Admin Aggregate Pacing Stats
+   */
+  public async fetchAdminStats() {
+    try {
+      const res = await fetch(`${API_BASE}/admin/stats`);
+      if (res.ok) return await res.json();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  /**
+   * Admin Leaderboard Query
+   */
+  public async fetchAdminLeaderboard(params: { portal?: string; sortBy?: string; order?: string; limit?: number } = {}) {
+    try {
+      const qs = new URLSearchParams();
+      if (params.portal) qs.append('portal', params.portal);
+      if (params.sortBy) qs.append('sortBy', params.sortBy);
+      if (params.order) qs.append('order', params.order);
+      if (params.limit) qs.append('limit', String(params.limit));
+
+      const res = await fetch(`${API_BASE}/admin/leaderboard?${qs.toString()}`);
+      if (res.ok) return await res.json();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  /**
+   * Admin Session Detail
+   */
+  public async fetchAdminSessionDetail(tokenOrId: string) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/sessions/${tokenOrId}`);
+      if (res.ok) return await res.json();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  /**
+   * Admin CSV Export URL
+   */
+  public getAdminExportUrl(): string {
+    return `${API_BASE}/admin/export.csv`;
   }
 }
 
