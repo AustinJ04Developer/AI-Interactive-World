@@ -117,7 +117,7 @@ class AIService {
 
     await new Promise(r => setTimeout(r, 500));
 
-    const lower = visitorMessage.toLowerCase();
+    const lower = (visitorMessage || '').toLowerCase();
     if (lower.includes('energy') || lower.includes('power')) {
       return `Our city runs on a decentralized fusion grid and atmospheric quantum harvesters. We reached 100% net-positive clean energy twelve years ago!`;
     }
