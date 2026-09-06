@@ -21,6 +21,7 @@ import {
   Share2
 } from 'lucide-react';
 import type { SouvenirData } from '../types';
+import QRCode from 'qrcode';
 import { generateSouvenirPoster } from '../services/souvenirService';
 import { soundFX } from '../services/audioService';
 import { apiService, resolveAssetUrl } from '../services/apiService';
@@ -52,6 +53,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   const [emailMsg, setEmailMsg] = useState<string>('');
 
   const [backendResult, setBackendResult] = useState<any>(null);
+  const [localQrDataUrl, setLocalQrDataUrl] = useState<string | null>(null);
+  const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
 
   useEffect(() => {
     soundFX.playSuccess();
@@ -77,42 +80,138 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     steps.forEach((step, idx) => {
       setTimeout(() => {
         setGenerationStep(step);
-      }, (idx + 1) * 350);
+      }, (idx + 1) * 300);
     });
 
-    // 1. Generate local high-res poster canvas (1200x1500)
-    generateSouvenirPoster(data).then(async (url) => {
-      setPosterUrl(url);
+    let isMounted = true;
 
-      // 2. Sync authoritative result with backend
-      const res = await apiService.completeExperience({
-        portal: data.experienceId,
-        sessionId: data.sessionId,
-        scenarioId: data.badge || 'EXP-001',
-        score: data.score,
-        xpEarned: 500,
-        achievements: data.achievements,
-        metrics: data.metrics,
-        aiSummary: data.aiAnalysis,
-        snapshotBase64: url
-      });
-
-      if (res) {
-        setBackendResult(res);
+    const initPosterWorkflow = async () => {
+      // Step A: Immediately construct a guaranteed fallback QR URL using current origin
+      const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:5173';
+      const fallbackTargetUrl = `${origin}/results/${data.sessionId}?exp=${data.experienceId}&score=${data.score}`;
+      let immediateQrDataUrl = '';
+      try {
+        immediateQrDataUrl = await QRCode.toDataURL(fallbackTargetUrl, {
+          margin: 1,
+          width: 320,
+          color: { dark: '#040915', light: '#ffffff' }
+        });
+        if (isMounted) {
+          setLocalQrDataUrl(immediateQrDataUrl);
+        }
+      } catch (err) {
+        console.warn('Fallback QR code generation warning:', err);
       }
 
-      setIsGenerating(false);
-      soundFX.playSuccess();
-    });
+      // Step B: Call backend to record result and generate authoritative QR token
+      let authoritativeResult: any = null;
+      try {
+        authoritativeResult = await apiService.completeExperience({
+          portal: data.experienceId,
+          sessionId: data.sessionId,
+          scenarioId: data.badge || 'EXP-001',
+          score: data.score,
+          xpEarned: 500,
+          achievements: data.achievements,
+          metrics: data.metrics,
+          aiSummary: data.aiAnalysis
+        });
+
+        if (authoritativeResult && isMounted) {
+          setBackendResult(authoritativeResult);
+        }
+      } catch (err) {
+        console.warn('Backend result recording notice:', err);
+      }
+
+      // Step C: Generate Hero Poster with REAL working QR (authoritative or fallback)
+      try {
+        const qrToDraw = authoritativeResult?.qrDataUrl || authoritativeResult?.resultWebUrl || immediateQrDataUrl || fallbackTargetUrl;
+        const url = await generateSouvenirPoster(data, qrToDraw);
+
+        if (isMounted) {
+          setPosterUrl(url);
+          setIsGenerating(false);
+          soundFX.playSuccess();
+        }
+      } catch (err) {
+        console.error('Poster generation failed, using emergency fallback:', err);
+        try {
+          const fallbackPoster = await generateSouvenirPoster(data);
+          if (isMounted) {
+            setPosterUrl(fallbackPoster);
+          }
+        } catch {
+          // ignore
+        }
+        if (isMounted) {
+          setIsGenerating(false);
+        }
+      }
+    };
+
+    initPosterWorkflow();
+
+    return () => {
+      isMounted = false;
+    };
   }, [data]);
 
   const handleDownload = () => {
-    if (!posterUrl) return;
+    if (!posterUrl) {
+      console.warn('Download unavailable: poster is not ready');
+      return;
+    }
     soundFX.playClick();
-    const link = document.createElement('a');
-    link.download = `AI-WORLD-HERO-${data.experienceId.toUpperCase()}-${data.sessionId}.png`;
-    link.href = posterUrl;
-    link.click();
+
+    try {
+      const fileName = `AI-WORLD-HERO-${data.experienceId.toUpperCase()}-${data.sessionId}.png`;
+
+      // Use Blob + ObjectURL to guarantee download across all browsers
+      if (posterUrl.startsWith('data:')) {
+        const parts = posterUrl.split(',');
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+        const byteString = atob(parts[1]);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([ia], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = blobUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        setDownloadSuccess(true);
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(blobUrl);
+          setDownloadSuccess(false);
+        }, 2000);
+      } else {
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = posterUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        setDownloadSuccess(true);
+        setTimeout(() => {
+          document.body.removeChild(link);
+          setDownloadSuccess(false);
+        }, 2000);
+      }
+    } catch (err) {
+      console.warn('Direct Blob download failed, attempting window open fallback:', err);
+      const win = window.open();
+      if (win) {
+        win.document.write(`<title>AI World Souvenir</title><img src="${posterUrl}" style="max-width:100%;height:auto;display:block;margin:auto;" />`);
+      }
+    }
   };
 
   const handlePrint = () => {
@@ -313,10 +412,21 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                     </button>
                     <button
                       onClick={handleDownload}
-                      className="px-3 py-1 rounded bg-cyan-400 text-black font-bold flex items-center space-x-1 hover:bg-cyan-300"
+                      className={`px-3 py-1 rounded font-bold flex items-center space-x-1 transition-all ${
+                        downloadSuccess ? 'bg-emerald-400 text-black' : 'bg-cyan-400 text-black hover:bg-cyan-300'
+                      }`}
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>SAVE</span>
+                      {downloadSuccess ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-black" />
+                          <span>SAVED!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5" />
+                          <span>SAVE</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -440,9 +550,9 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
           {/* Quick Scan Smartphone QR Banner */}
           <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/70 to-slate-950 border-2 border-cyan-400/50 shadow-xl flex items-center space-x-4">
-            {backendResult?.qrDataUrl ? (
+            {(backendResult?.qrDataUrl || localQrDataUrl) ? (
               <img
-                src={backendResult.qrDataUrl}
+                src={backendResult?.qrDataUrl || localQrDataUrl!}
                 alt="Scan with phone"
                 className="w-20 h-20 rounded-lg bg-white p-1 shrink-0 shadow-md cursor-pointer hover:scale-105 transition-transform"
                 onClick={() => { soundFX.playClick(); setShowQrModal(true); }}
@@ -494,10 +604,23 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
               <button
                 onClick={handleDownload}
-                className="py-2.5 rounded-xl bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-300 text-xs font-mono flex items-center justify-center space-x-1.5 transition-colors"
+                className={`py-2.5 rounded-xl border text-xs font-mono flex items-center justify-center space-x-1.5 transition-colors ${
+                  downloadSuccess 
+                    ? 'bg-emerald-950 border-emerald-500 text-emerald-300' 
+                    : 'bg-slate-900 border-slate-700 hover:border-slate-500 text-slate-300'
+                }`}
               >
-                <Download className="w-4 h-4 text-slate-400" />
-                <span>DOWNLOAD FILE</span>
+                {downloadSuccess ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>SAVED FILE ✓</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4 text-slate-400" />
+                    <span>DOWNLOAD FILE</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -608,8 +731,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             </div>
 
             <div className="p-4 bg-white rounded-2xl inline-block mx-auto shadow-2xl">
-              {backendResult?.qrDataUrl ? (
-                <img src={backendResult.qrDataUrl} alt="QR Code" className="w-56 h-56" />
+              {(backendResult?.qrDataUrl || localQrDataUrl) ? (
+                <img src={backendResult?.qrDataUrl || localQrDataUrl!} alt="QR Code" className="w-56 h-56" />
               ) : (
                 <QrCode className="w-56 h-56 text-black" />
               )}

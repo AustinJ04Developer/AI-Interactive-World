@@ -6,7 +6,10 @@ import { resolveAssetUrl } from './apiService';
  * High-Resolution Canvas 2D Souvenir Dossier / Poster Generator
  * Composites visitor photo, thematic background, HUD graphics, stamps, metrics, and QR code.
  */
-export async function generateSouvenirPoster(data: SouvenirData): Promise<string> {
+export async function generateSouvenirPoster(
+  data: SouvenirData,
+  qrCodeUrlOrDataUrl?: string
+): Promise<string> {
   const width = 1200;
   const height = 1500;
 
@@ -126,7 +129,8 @@ export async function generateSouvenirPoster(data: SouvenirData): Promise<string
     try {
       const img = new Image();
       let src = resolveAssetUrl(data.visitorPhotoUrl.trim());
-      if (src.startsWith('http')) {
+      // Only set crossOrigin for external HTTP/HTTPS images, NOT for data: URLs
+      if (src.startsWith('http://') || src.startsWith('https://')) {
         img.crossOrigin = 'anonymous';
       }
       await new Promise<void>((resolve) => {
@@ -299,16 +303,27 @@ export async function generateSouvenirPoster(data: SouvenirData): Promise<string
   ctx.fillRect(qrX, qrY, qrSize, qrSize);
 
   try {
-    // Generate QR Code data URL for the exhibition result
-    const qrPayload = `https://ai-world.expo/results/${data.sessionId}?exp=${data.experienceId}&score=${data.score}`;
-    const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-      margin: 1,
-      width: qrSize,
-      color: { dark: '#040915', light: '#ffffff' }
-    });
+    let qrDataUrlToDraw: string = '';
+
+    if (qrCodeUrlOrDataUrl && qrCodeUrlOrDataUrl.startsWith('data:image')) {
+      // Pre-generated QR data URL from backend
+      qrDataUrlToDraw = qrCodeUrlOrDataUrl;
+    } else {
+      let qrTargetUrl = qrCodeUrlOrDataUrl;
+      if (!qrTargetUrl) {
+        const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:5173';
+        qrTargetUrl = `${origin}/results/${data.sessionId}?exp=${data.experienceId}&score=${data.score}`;
+      }
+      qrDataUrlToDraw = await QRCode.toDataURL(qrTargetUrl, {
+        margin: 1,
+        width: qrSize,
+        color: { dark: '#040915', light: '#ffffff' }
+      });
+    }
+
     const qrImg = new Image();
     await new Promise<void>((resolve) => {
-      imgOnLoad(qrImg, qrDataUrl, resolve);
+      imgOnLoad(qrImg, qrDataUrlToDraw, resolve);
     });
     ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
   } catch (err) {
@@ -331,7 +346,17 @@ export async function generateSouvenirPoster(data: SouvenirData): Promise<string
   // Science Expo Official Stamp (circular emblem)
   drawOfficialExpoStamp(ctx, width - 180, qrY + 80, data.themeColor);
 
-  return canvas.toDataURL('image/png', 0.95);
+  try {
+    return canvas.toDataURL('image/png', 0.95);
+  } catch (err) {
+    console.warn('Canvas toDataURL PNG export failed, trying JPEG fallback:', err);
+    try {
+      return canvas.toDataURL('image/jpeg', 0.85);
+    } catch (innerErr) {
+      console.error('All canvas exports failed:', innerErr);
+      return '';
+    }
+  }
 }
 
 function imgOnLoad(img: HTMLImageElement, src: string, resolve: () => void) {

@@ -60,13 +60,59 @@ export const MobileResultView: React.FC<MobileResultViewProps> = ({ token, onRet
     }
   };
 
-  const handleDownloadImage = () => {
+  const handleDownloadImage = async () => {
     soundFX.playClick();
     if (!resultData?.snapshotUrl) return;
-    const link = document.createElement('a');
-    link.download = `AI-World-Souvenir-${token.slice(0, 6)}.png`;
-    link.href = resolveAssetUrl(resultData.snapshotUrl);
-    link.click();
+    const url = resolveAssetUrl(resultData.snapshotUrl);
+    const fileName = `AI-World-Souvenir-${token.slice(0, 6)}.png`;
+
+    try {
+      if (url.startsWith('data:')) {
+        const parts = url.split(',');
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+        const byteString = atob(parts[1]);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([ia], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = blobUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(blobUrl);
+        }, 2000);
+      } else {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = blobUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(blobUrl);
+        }, 2000);
+      }
+    } catch {
+      const link = document.createElement('a');
+      link.download = fileName;
+      link.href = url;
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => document.body.removeChild(link), 1000);
+    }
   };
 
   if (loading) {
