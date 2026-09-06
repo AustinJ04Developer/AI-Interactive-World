@@ -292,10 +292,8 @@ export const MobileResultView: React.FC<MobileResultViewProps> = ({ token, onRet
             description: 'Mission achievement unlocked at Science Exhibition 2026.'
           }))
         ],
-        cardFrontUrl: cardFrontUrl || undefined,
-        cardBackUrl: cardBackUrl || undefined,
-        badgePrintUrl: dualPrintUrl || cardFrontUrl || undefined,
-        posterUrl: posterUrl || undefined,
+        // Send token only — server builds the result page URL.
+        // Avoids sending huge canvas data URLs in the request body.
         token: token
       });
       if (res.success) {
@@ -821,3 +819,4 @@ export const MobileResultView: React.FC<MobileResultViewProps> = ({ token, onRet
     </div>
   );
 };
+

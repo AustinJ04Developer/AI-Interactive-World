@@ -136,7 +136,7 @@ export const OperativeCard3D: React.FC<OperativeCard3DProps> = ({
   };
 
   const theme = portalThemes[data.experienceId] || portalThemes['detective'];
-  const photoUrl = resolveAssetUrl(data.visitorPhotoUrl) || '/media/synthetic_avatar.png';
+  const photoUrl = (resolveAssetUrl(data.visitorPhotoUrl) || null) ?? '/media/synthetic_avatar.png';
   const badgeRank = data.badge || (data.score >= 850 ? 'COMMANDER RANK' : data.score >= 600 ? 'SPECIALIST RANK' : 'OPERATIVE CADET');
 
   const ribbons = [
@@ -249,7 +249,7 @@ export const OperativeCard3D: React.FC<OperativeCard3DProps> = ({
             <div 
               className="absolute inset-0 pointer-events-none opacity-20 mix-blend-color-dodge transition-opacity group-hover:opacity-35"
               style={{
-                background: `linear-gradient(${115 + tilt.y * 2}deg, transparent 20%, rgba(255,255,255,0.4) 40%, rgba(0,242,254,0.6) 50%, rgba(255,0,128,0.5) 60%, transparent 80%)`,
+                backgroundImage: `linear-gradient(${115 + tilt.y * 2}deg, transparent 20%, rgba(255,255,255,0.4) 40%, rgba(0,242,254,0.6) 50%, rgba(255,0,128,0.5) 60%, transparent 80%)`,
                 backgroundSize: '200% 200%',
                 backgroundPosition: `${tilt.glareX}% ${tilt.glareY}%`
               }}
@@ -755,3 +755,4 @@ export const OperativeCard3D: React.FC<OperativeCard3DProps> = ({
     </div>
   );
 };
+

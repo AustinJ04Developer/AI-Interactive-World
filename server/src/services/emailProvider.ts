@@ -191,7 +191,7 @@ export class EmailProvider {
         <div style="margin: 20px 0;">
           <p style="font-size: 16px; margin: 0 0 8px 0;">Greetings, Operative <strong>${visitorName}</strong>! 👋</p>
           <p style="font-size: 13px; color: #cbd5e1; line-height: 1.5; margin: 0;">
-            Congratulations on completing your mission in <strong>${experienceTitle}</strong>. Your official credentials and commemorative exhibition poster have been prepared in PDF format and attached to this email.
+            Congratulations on completing your mission in <strong>${experienceTitle}</strong>! Your interactive 3D badge, full performance telemetry, and souvenir poster are live on your personal result page — tap the button below to open it instantly.
           </p>
         </div>
         
@@ -315,7 +315,7 @@ export class EmailProvider {
     }
 
     if (status === 'SENT') {
-      return { success: true, message: `Official badge and poster PDFs successfully dispatched to ${recipientEmail}!` };
+      return { success: true, message: `Your results page and badge credentials have been sent to ${recipientEmail}! Check your inbox.` };
     } else {
       return { success: false, message: `Email server temporarily unavailable. Please scan the QR code to view on your phone!` };
     }
@@ -323,3 +323,6 @@ export class EmailProvider {
 }
 
 export const emailProvider = new EmailProvider();
+
+
+
