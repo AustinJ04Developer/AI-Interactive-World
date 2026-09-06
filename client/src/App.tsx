@@ -81,12 +81,22 @@ export const App: React.FC = () => {
   // Keyboard Shortcuts (Ctrl+Shift+D or ~ for Demo Mode, M for sound, F11/fullscreen)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') || e.key === '`' || e.key === '~') {
+      const key = e.key?.toLowerCase() ?? '';
+
+      if (
+        (e.ctrlKey && e.shiftKey && key === 'd') ||
+        key === '`' ||
+        key === '~'
+      ) {
         e.preventDefault();
         soundFX.playClick();
         setIsDemoModalOpen(prev => !prev);
       }
-      if (e.key.toLowerCase() === 'm' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+
+      if (
+        key === 'm' &&
+        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
+      ) {
         handleToggleSound();
       }
     };
